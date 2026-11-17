@@ -177,6 +177,7 @@ pub const ADBLOCK_JS: &str = r#"
 (function() {
     if (window._ferro_adblock_installed) return;
     window._ferro_adblock_installed = true;
+    if (window.location.protocol === 'ferro:') return;
 
     const ferroCfg = window._ferro_settings || {};
     if (ferroCfg.do_not_track !== false) {
@@ -727,13 +728,21 @@ pub const ADBLOCK_JS: &str = r#"
         "yumenetworks.com",
         "zenaps.com"
     ];
+    const SUPER_TEST_SET = new Set(SUPER_TEST_HOSTS);
 
     function isAdUrl(url) {
         if (!url || typeof url !== "string") return false;
         const u = url.toLowerCase();
         if (u.includes("ads.js") || u.includes("pagead.js") || u.includes("/ads.") || u.includes("/pagead.")) return true;
-        if (AD_DOMAINS.some(d => u.includes(d))) return true;
-        if (SUPER_TEST_HOSTS.some(h => u.includes(h))) return true;
+        // Fast O(1) hostname lookup before substring fallback
+        try {
+            const parsed = new URL(u, window.location.href);
+            const h = parsed.hostname;
+            if (SUPER_TEST_SET.has(h)) return true;
+        } catch (e) {}
+        for (let i = 0; i < AD_DOMAINS.length; i++) {
+            if (u.includes(AD_DOMAINS[i])) return true;
+        }
         return false;
     }
 
@@ -948,19 +957,8 @@ pub const ADBLOCK_JS: &str = r#"
                 }
             }
 
-            // Remove background ad image from html and body
-            [document.documentElement, document.body].forEach(function(el) {
-                if (!el) return;
-                const bg = (el.style.backgroundImage || '') + ' ' + (window.getComputedStyle(el).backgroundImage || '');
-                if (/traffer|branding|parik|casino|bonus|bet|dog.*house|megaways|JBWheel|advert|banner|1x|AuCordesk|lp-b__brand/i.test(bg)) {
-                    el.style.setProperty('background', '#111111', 'important');
-                    el.style.setProperty('background-image', 'none', 'important');
-                    el.style.setProperty('cursor', 'default', 'important');
-                }
-            });
-
             // Remove canyoublockit extreme test dummy ad elements
-            const testAds = document.querySelectorAll('.code-block, [class*="code-block"], [class^="__clb-"], img[src*="Caution1"], img[data-src*="Caution1"], .wp-image-1133, img[src*="Screenshot_1"], img[data-src*="Screenshot_1"], .wp-image-3462, img[src*="Screenshot_16"], img[data-src*="Screenshot_16"], .wp-image-30781, [class*="feedback"], #feedback, .feedback-btn, .elementor-element-35203eb, .elementor-element-5c7335d, .elementor-element-928b71a, .elementor-element-f78181b');
+            const testAds = document.querySelectorAll('.code-block, [class^="__clb-"], img[src*="Caution1"], .wp-image-1133, img[src*="Screenshot_1"], .wp-image-3462, img[src*="Screenshot_16"], .wp-image-30781, #feedback, .feedback-btn, .elementor-element-35203eb, .elementor-element-5c7335d, .elementor-element-928b71a, .elementor-element-f78181b');
             for (let j = 0; j < testAds.length; j++) {
                 const el = testAds[j];
                 const col = el.closest('.elementor-column, .elementor-element-5c7335d, .elementor-element-bebe1cc, .elementor-element-4881fb9, .elementor-element-e1591ee');
@@ -973,22 +971,54 @@ pub const ADBLOCK_JS: &str = r#"
         } catch(e) {}
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', cleanAds);
-    } else {
-        cleanAds();
+    function cleanBodyBrandingOnce() {
+        try {
+            [document.documentElement, document.body].forEach(function(el) {
+                if (!el) return;
+                const bg = (el.style.backgroundImage || '') + ' ' + (window.getComputedStyle(el).backgroundImage || '');
+                if (/traffer|branding|parik|casino|bonus|bet|dog.*house|megaways|JBWheel|advert|banner|1x|AuCordesk|lp-b__brand/i.test(bg)) {
+                    el.style.setProperty('background', '#111111', 'important');
+                    el.style.setProperty('background-image', 'none', 'important');
+                    el.style.setProperty('cursor', 'default', 'important');
+                }
+            });
+        } catch(e) {}
     }
 
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            cleanAds();
+            cleanBodyBrandingOnce();
+        }, { once: true });
+    } else {
+        cleanAds();
+        cleanBodyBrandingOnce();
+    }
+    window.addEventListener('load', cleanBodyBrandingOnce, { once: true });
+
+    // Throttled idle cosmetic cleanup (avoids blocking 60/120fps scrolling on YouTube/Reddit!)
     try {
+        let cleanScheduled = false;
+        const scheduleClean = () => {
+            if (cleanScheduled) return;
+            cleanScheduled = true;
+            setTimeout(() => {
+                cleanScheduled = false;
+                if (window.requestIdleCallback) {
+                    window.requestIdleCallback(cleanAds, { timeout: 400 });
+                } else {
+                    cleanAds();
+                }
+            }, 260);
+        };
+
         const observer = new MutationObserver((mutations) => {
-            let found = false;
             for (let i = 0; i < mutations.length; i++) {
                 if (mutations[i].addedNodes.length > 0) {
-                    found = true;
+                    scheduleClean();
                     break;
                 }
             }
-            if (found) cleanAds();
         });
         observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
     } catch(e) {}
@@ -1399,6 +1429,20 @@ pub const CONTEXT_MENU_JS: &str = r#"
 
         // Standard Firefox-style page items
         items.push({
+            label: 'Найти на странице...',
+            kbd: 'Ctrl+F',
+            action: () => {
+                if (window._ferroOpenFindBar) window._ferroOpenFindBar();
+            }
+        });
+        items.push({
+            label: 'Печать / Сохранить в PDF...',
+            kbd: 'Ctrl+P',
+            action: () => {
+                postIpc({ action: 'print_page' });
+            }
+        });
+        items.push({
             label: 'Сохранить страницу как...',
             kbd: 'Ctrl+S',
             action: () => {
@@ -1662,7 +1706,144 @@ pub const HOTKEYS_JS: &str = r#"
     if (window._ferro_hotkeys_installed) return;
     window._ferro_hotkeys_installed = true;
 
+    // Floating Shadow-DOM Find-in-Page Bar (backed by WebKitGTK native FindController)
+    const FIND_HOST_ID = 'ferro-find-bar-host';
+    window._ferroOpenFindBar = function() {
+        let existing = document.getElementById(FIND_HOST_ID);
+        if (existing && existing.shadowRoot) {
+            const inp = existing.shadowRoot.getElementById('findInp');
+            if (inp) { inp.focus(); inp.select(); return; }
+        }
+        if (existing) existing.remove();
+
+        const cfg = window._ferro_settings || {};
+        const isLight = cfg.theme_mode === 'light';
+        const rad = cfg.corner_radius !== undefined ? Math.max(3, Math.min(12, cfg.corner_radius)) : 5;
+        const bg = isLight ? '#ffffff' : '#1b1b1f';
+        const fg = isLight ? '#18181b' : '#f2f2f5';
+        const border = isLight ? '#d4d4d8' : '#383842';
+        const hover = isLight ? '#ebebf0' : '#2c2c36';
+
+        const host = document.createElement('div');
+        host.id = FIND_HOST_ID;
+        host.style.cssText = 'position:fixed;top:10px;right:16px;z-index:2147483647;';
+        const shadow = host.attachShadow({ mode: 'open' });
+
+        shadow.innerHTML = `
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+                .bar {
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    height: 36px;
+                    padding: 0 6px 0 10px;
+                    background: ${bg};
+                    color: ${fg};
+                    border: 1px solid ${border};
+                    border-radius: ${rad}px;
+                    box-shadow: 0 8px 24px rgba(0,0,0,${isLight ? '0.16' : '0.55'});
+                }
+                input {
+                    width: 195px;
+                    height: 26px;
+                    border: none;
+                    outline: none;
+                    background: transparent;
+                    color: ${fg};
+                    font-size: 12.5px;
+                }
+                button {
+                    width: 26px;
+                    height: 26px;
+                    border: none;
+                    border-radius: ${Math.max(2, rad - 1)}px;
+                    background: transparent;
+                    color: ${fg};
+                    cursor: pointer;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 12px;
+                }
+                button:hover { background: ${hover}; }
+            </style>
+            <div class="bar">
+                <input id="findInp" type="text" placeholder="Найти на странице..." autocomplete="off" />
+                <button type="button" id="prevBtn" title="Предыдущее (Shift+Enter)">↑</button>
+                <button type="button" id="nextBtn" title="Следующее (Enter)">↓</button>
+                <button type="button" id="closeBtn" title="Закрыть (Esc)">✕</button>
+            </div>
+        `;
+
+        const inp = shadow.getElementById('findInp');
+        const send = (p) => { if (window.ipc) window.ipc.postMessage(JSON.stringify(p)); };
+
+        const closeFind = () => {
+            send({ action: 'find_clear' });
+            host.remove();
+        };
+
+        inp.addEventListener('input', () => {
+            const q = inp.value;
+            if (q) send({ action: 'find_text', url: q });
+            else send({ action: 'find_clear' });
+        });
+
+        inp.addEventListener('keydown', (ev) => {
+            ev.stopPropagation();
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                send({ action: ev.shiftKey ? 'find_prev' : 'find_next' });
+            } else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                closeFind();
+            }
+        });
+
+        shadow.getElementById('prevBtn').addEventListener('click', () => send({ action: 'find_prev' }));
+        shadow.getElementById('nextBtn').addEventListener('click', () => send({ action: 'find_next' }));
+        shadow.getElementById('closeBtn').addEventListener('click', closeFind);
+
+        const sel = window.getSelection ? window.getSelection().toString().trim() : '';
+        if (sel && sel.length < 80) {
+            inp.value = sel;
+            send({ action: 'find_text', url: sel });
+        }
+
+        (document.body || document.documentElement).appendChild(host);
+        inp.focus();
+        inp.select();
+    };
+
     window.addEventListener('keydown', function(e) {
+        // Ctrl+F (or Cyrillic А): Find in Page
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А' || e.code === 'KeyF')) {
+            e.preventDefault();
+            e.stopPropagation();
+            window._ferroOpenFindBar();
+            return;
+        }
+
+        // Ctrl+P (or Cyrillic З): Print / Save as PDF
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P' || e.key === 'з' || e.key === 'З' || e.code === 'KeyP')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'print_page' }));
+            }
+            return;
+        }
+
+        // Ctrl+J (or Cyrillic О): Downloads Manager
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'j' || e.key === 'J' || e.key === 'о' || e.key === 'О' || e.code === 'KeyJ')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'new_tab', url: 'ferro://downloads' }));
+            }
+            return;
+        }
         // F12 or Ctrl+Shift+I: WebInspector
         if (e.key === 'F12' || (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'i' || e.code === 'KeyI'))) {
             e.preventDefault();

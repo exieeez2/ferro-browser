@@ -1,5 +1,6 @@
 mod adblocker;
 mod bookmarks;
+mod downloads;
 mod history;
 mod importer;
 mod injector;
@@ -15,9 +16,10 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use webkit2gtk::{
-    DownloadExt, LoadEvent, NavigationPolicyDecision, NavigationPolicyDecisionExt,
-    PolicyDecisionExt, PolicyDecisionType, SettingsExt, URIRequestExt, WebContextExt,
-    WebInspectorExt, WebViewExt, WebsiteDataManagerExtManual, WebsiteDataTypes,
+    CacheModel, DownloadExt, FindControllerExt, FindOptions, HardwareAccelerationPolicy, LoadEvent,
+    NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType,
+    PrintOperation, PrintOperationExt, SettingsExt, URIRequestExt, WebContextExt, WebInspectorExt,
+    WebViewExt, WebsiteDataManagerExtManual, WebsiteDataTypes,
 };
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
@@ -25,6 +27,7 @@ mod session;
 
 use adblocker::AdBlocker;
 use bookmarks::BookmarksData;
+use downloads::DownloadsData;
 use history::HistoryData;
 use importer::BrowserImporter;
 use passwords::PasswordsData;
@@ -47,6 +50,9 @@ struct Tab {
     can_go_back: bool,
     can_go_forward: bool,
     is_loading: bool,
+    is_pinned: bool,
+    is_muted: bool,
+    zoom_pct: u32,
     webview: Rc<WebView>,
     inner: webkit2gtk::WebView,
     container: gtk::Box,
@@ -65,6 +71,8 @@ struct BrowserState {
     bookmarks: BookmarksData,
     history: HistoryData,
     passwords: PasswordsData,
+    downloads: Arc<Mutex<DownloadsData>>,
+    pending_password: Option<(String, String, String)>,
     settings: BrowserSettings,
     web_context: wry::WebContext,
     adblocker: Arc<AdBlocker>,
@@ -116,6 +124,9 @@ fn sync_tabs_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
                         "canGoBack": t.can_go_back,
                         "canGoForward": t.can_go_forward,
                         "isLoading": t.is_loading,
+                        "isPinned": t.is_pinned,
+                        "isMuted": t.is_muted,
+                        "zoomPct": t.zoom_pct,
                     })
                 })
                 .collect();
@@ -146,6 +157,9 @@ fn sync_tab_update_to_ui(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
                     "canGoBack": t.can_go_back,
                     "canGoForward": t.can_go_forward,
                     "isLoading": t.is_loading,
+                    "isPinned": t.is_pinned,
+                    "isMuted": t.is_muted,
+                    "zoomPct": t.zoom_pct,
                 })
             });
             (data, state.top_webview.clone())
@@ -305,9 +319,17 @@ fn render_source_viewer_html(url: &str, raw_html: &str, s: &BrowserSettings) -> 
     )
 }
 
-fn attach_download_handler(ctx: &webkit2gtk::WebContext, state_weak: Weak<RefCell<BrowserState>>) {
+fn attach_download_handler(
+    ctx: &webkit2gtk::WebContext,
+    state_weak: Weak<RefCell<BrowserState>>,
+    downloads_store: Arc<Mutex<DownloadsData>>,
+) {
     ctx.connect_download_started(move |_ctx, download| {
         let state_weak_dest = state_weak.clone();
+        let dl_store_start = downloads_store.clone();
+        let dl_id_cell = Rc::new(RefCell::new(0_u64));
+        let dl_id_for_dest = dl_id_cell.clone();
+
         download.connect_decide_destination(move |dl, suggested_filename| {
             let dl_dir = BrowserSettings::load_or_default().download_dir;
             let base_dir = if dl_dir.trim().is_empty() {
@@ -346,6 +368,20 @@ fn attach_download_handler(ctx: &webkit2gtk::WebContext, state_weak: Weak<RefCel
             let uri = format!("file://{}", dest_path.to_string_lossy());
             dl.set_destination(&uri);
 
+            let src_url = dl
+                .request()
+                .and_then(|r| r.uri())
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            let final_name = dest_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| safe_name.to_string());
+            if let Ok(mut guard) = dl_store_start.lock() {
+                let new_id = guard.add_started(&final_name, &src_url, &dest_path.to_string_lossy());
+                *dl_id_for_dest.borrow_mut() = new_id;
+            }
+
             let saved_display = dest_path.to_string_lossy().replace('\\', "/").replace('\'', "\\'");
             if let Some(state_rc) = state_weak_dest.upgrade() {
                 let active_wv = state_rc.try_borrow().ok().and_then(|s| {
@@ -370,8 +406,39 @@ fn attach_download_handler(ctx: &webkit2gtk::WebContext, state_weak: Weak<RefCel
             true
         });
 
+        let dl_store_prog = downloads_store.clone();
+        let dl_id_for_prog = dl_id_cell.clone();
+        download.connect_estimated_progress_notify(move |dl| {
+            let id = *dl_id_for_prog.borrow();
+            if id != 0 {
+                let pct = (dl.estimated_progress() * 100.0).round() as u32;
+                if let Ok(mut guard) = dl_store_prog.lock() {
+                    guard.update_progress(id, pct);
+                }
+            }
+        });
+
+        let dl_store_fail = downloads_store.clone();
+        let dl_id_for_fail = dl_id_cell.clone();
+        download.connect_failed(move |_dl, _err| {
+            let id = *dl_id_for_fail.borrow();
+            if id != 0 {
+                if let Ok(mut guard) = dl_store_fail.lock() {
+                    guard.mark_failed(id);
+                }
+            }
+        });
+
         let state_weak_fin = state_weak.clone();
+        let dl_store_fin = downloads_store.clone();
+        let dl_id_for_fin = dl_id_cell;
         download.connect_finished(move |dl| {
+            let id = *dl_id_for_fin.borrow();
+            if id != 0 {
+                if let Ok(mut guard) = dl_store_fin.lock() {
+                    guard.mark_finished(id);
+                }
+            }
             let dest = dl
                 .destination()
                 .map(|d| d.strip_prefix("file://").unwrap_or(&d).to_string())
@@ -403,27 +470,34 @@ fn attach_download_handler(ctx: &webkit2gtk::WebContext, state_weak: Weak<RefCel
 
 fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
     let (settings_json, top_wv, tab_wvs) = {
-        if let Ok(state) = state_rc.try_borrow() {
+        if let Ok(mut state) = state_rc.try_borrow_mut() {
             update_gtk_menu_css(&state.css_provider, &state.settings);
             let top_h = if state.settings.show_bookmarks_bar { 102 } else { 74 };
             state.top_box.set_size_request(-1, top_h);
 
             let surface_rgba = compute_surface_rgba(&state.settings);
-            let zoom_factor = (state.settings.default_zoom.clamp(50, 200) as f64) / 100.0;
-            state.adblocker.set_enabled(state.settings.adblock_enabled);
+            let clamped_zoom = state.settings.default_zoom.clamp(50, 200);
+            let zoom_factor = (clamped_zoom as f64) / 100.0;
+            let smooth_scrolling = state.settings.smooth_scrolling;
+            let enable_webgl = state.settings.enable_webgl;
+            let enable_js = state.settings.enable_javascript;
+            let adblock_enabled = state.settings.adblock_enabled;
+            let native_filter = state.native_filter.clone();
+            state.adblocker.set_enabled(adblock_enabled);
 
-            for t in &state.tabs {
+            for t in &mut state.tabs {
                 t.inner.set_background_color(&surface_rgba);
                 t.inner.set_zoom_level(zoom_factor);
+                t.zoom_pct = clamped_zoom;
                 if let Some(wk_s) = WebViewExt::settings(&t.inner) {
-                    wk_s.set_enable_smooth_scrolling(state.settings.smooth_scrolling);
-                    wk_s.set_enable_webgl(state.settings.enable_webgl);
+                    wk_s.set_enable_smooth_scrolling(smooth_scrolling);
+                    wk_s.set_enable_webgl(enable_webgl);
                     let is_internal = t.url.starts_with("ferro://") || t.url.is_empty();
-                    wk_s.set_enable_javascript(is_internal || state.settings.enable_javascript);
+                    wk_s.set_enable_javascript(is_internal || enable_js);
                 }
                 if let Some(ucm) = t.inner.user_content_manager() {
-                    if let Some(filter) = &state.native_filter {
-                        if state.settings.adblock_enabled {
+                    if let Some(filter) = &native_filter {
+                        if adblock_enabled {
                             attach_to_ucm(&ucm, filter);
                         } else {
                             detach_from_ucm(&ucm, filter);
@@ -460,6 +534,7 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
         );
         let _ = tab.evaluate_script(&js);
     }
+    sync_tabs_to_ui(state_rc);
     sync_adblock_to_ui(state_rc);
 }
 
@@ -544,6 +619,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
         bookmarks_dirty,
         history_dirty,
         passwords_dirty,
+        downloads_store,
         source_cache,
     ) = {
         if let Ok(mut state) = state_rc.try_borrow_mut() {
@@ -566,6 +642,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 state.bookmarks_dirty.clone(),
                 state.history_dirty.clone(),
                 state.passwords_dirty.clone(),
+                state.downloads.clone(),
                 state.page_source_cache.clone(),
             )
         } else {
@@ -711,6 +788,33 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
             } else if path_and_query.starts_with("api/session/dismiss") {
                 SessionData::clear();
                 (r#"{"status":"ok"}"#.to_string(), "application/json")
+            } else if path_and_query.starts_with("downloads") {
+                let html_out = downloads_store
+                    .lock()
+                    .map(|d| d.render_html())
+                    .unwrap_or_default();
+                (html_out, "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("api/downloads/get") {
+                let json_out = downloads_store
+                    .lock()
+                    .ok()
+                    .and_then(|d| serde_json::to_string(&d.items).ok())
+                    .unwrap_or_else(|| "[]".to_string());
+                (json_out, "application/json")
+            } else if path_and_query.starts_with("api/downloads/delete") {
+                if let Some(id_str) = path_and_query.split("id=").nth(1) {
+                    if let Ok(id) = id_str.split('&').next().unwrap_or("").parse::<u64>() {
+                        if let Ok(mut d) = downloads_store.lock() {
+                            d.delete(id);
+                        }
+                    }
+                }
+                (r#"{"status":"ok"}"#.to_string(), "application/json")
+            } else if path_and_query.starts_with("api/downloads/clear") {
+                if let Ok(mut d) = downloads_store.lock() {
+                    d.clear();
+                }
+                (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("history") {
                 let h = HistoryData::load_or_default();
                 (h.render_html(), "text/html; charset=utf-8")
@@ -740,6 +844,32 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                     }
                 }
                 (r#"{"status":"ok"}"#.to_string(), "application/json")
+            } else if path_and_query.starts_with("api/passwords/update") {
+                let query = path_and_query.split('?').nth(1).unwrap_or("");
+                let mut id_val: Option<u64> = None;
+                let mut origin = String::new();
+                let mut user = String::new();
+                let mut pass = String::new();
+                for pair in query.split('&') {
+                    if let Some((k, v)) = pair.split_once('=') {
+                        let decoded = percent_encoding::percent_decode_str(v)
+                            .decode_utf8_lossy()
+                            .to_string();
+                        match k {
+                            "id" => id_val = decoded.parse::<u64>().ok(),
+                            "origin" => origin = decoded,
+                            "user" => user = decoded,
+                            "pass" => pass = decoded,
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(id) = id_val {
+                    let mut p = PasswordsData::load_or_default();
+                    p.update_by_id(id, &origin, &user, &pass);
+                    passwords_dirty.store(true, Ordering::SeqCst);
+                }
+                (r#"{"status":"updated"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/passwords/save") {
                 let query = path_and_query.split('?').nth(1).unwrap_or("");
                 let mut origin = String::new();
@@ -766,12 +896,16 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 (r#"{"status":"saved"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/passwords/import") {
                 let body_bytes = req.body();
+                let mut imported = 0usize;
                 if let Ok(csv_text) = std::str::from_utf8(body_bytes) {
                     let mut p = PasswordsData::load_or_default();
-                    p.import_chrome_csv(csv_text);
+                    imported = p.import_chrome_csv(csv_text);
                     passwords_dirty.store(true, Ordering::SeqCst);
                 }
-                (r#"{"status":"ok"}"#.to_string(), "application/json")
+                (format!(r#"{{"status":"ok","imported":{}}}"#, imported), "application/json")
+            } else if path_and_query.starts_with("api/passwords/export") {
+                let p = PasswordsData::load_or_default();
+                (p.export_csv(), "text/csv; charset=utf-8")
             } else {
                 (NEWTAB_HTML.to_string(), "text/html; charset=utf-8")
             };
@@ -810,23 +944,28 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
     inner_wv.set_background_color(&compute_surface_rgba(&settings_snapshot));
     inner_wv.set_zoom_level((settings_snapshot.default_zoom.clamp(50, 200) as f64) / 100.0);
 
-    // Attach global WebKit download handler once on the shared WebContext
+    // Attach global WebKit download handler & WebBrowser cache model once on the shared WebContext
     {
         if let Ok(mut st) = state_rc.try_borrow_mut() {
             if !st.download_handler_attached {
                 if let Some(wk_ctx) = inner_wv.context() {
-                    attach_download_handler(&wk_ctx, Rc::downgrade(state_rc));
+                    wk_ctx.set_cache_model(CacheModel::WebBrowser);
+                    attach_download_handler(&wk_ctx, Rc::downgrade(state_rc), st.downloads.clone());
                     st.download_handler_attached = true;
                 }
             }
         }
     }
 
-    // Set Chrome User-Agent for Google accounts login, enable WebInspector & user engine settings
+    // Set Chrome User-Agent, hardware acceleration, bfcache, DNS prefetch, fullscreen & user engine settings
     if let Some(settings) = WebViewExt::settings(&inner_wv) {
         settings.set_user_agent(Some(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         ));
+        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
+        settings.set_enable_page_cache(true);
+        settings.set_enable_dns_prefetching(true);
+        settings.set_enable_fullscreen(true);
         settings.set_enable_developer_extras(true);
         settings.set_enable_webgl(settings_snapshot.enable_webgl);
         settings.set_enable_smooth_scrolling(settings_snapshot.smooth_scrolling);
@@ -877,12 +1016,64 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 let uri = wv.uri().map(|u| u.to_string()).unwrap_or_default();
                 let title = wv.title().map(|t| t.to_string()).unwrap_or_default();
                 if !uri.is_empty() && !uri.starts_with("ferro://") && uri != "about:blank" {
-                    if let Ok(mut state) = state_rc.try_borrow_mut() {
-                        state.history.add(&uri, &title);
+                    let doorhanger_target = {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            state.history.add(&uri, &title);
+                            if state.settings.offer_save_passwords {
+                                if let Some((orig, usr, pwd)) = state.pending_password.clone() {
+                                    if !state.passwords.is_already_saved(&orig, &usr, &pwd) {
+                                        let is_update = state.passwords.items.iter().any(|p| {
+                                            p.origin.eq_ignore_ascii_case(&orig)
+                                                && p.username.eq_ignore_ascii_case(&usr)
+                                        });
+                                        let tab_wv = state
+                                            .tabs
+                                            .iter()
+                                            .find(|t| t.id == tab_id_copy)
+                                            .map(|t| t.webview.clone());
+                                        tab_wv.map(|twv| {
+                                            (twv, PasswordsData::build_doorhanger_js(&orig, &usr, &pwd, is_update))
+                                        })
+                                    } else {
+                                        state.pending_password = None;
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some((twv, js)) = doorhanger_target {
+                        let _ = twv.evaluate_script(&js);
                     }
                 }
             }
         }
+    });
+
+    // True HTML5 / YouTube video fullscreen: hide top chrome on enter, restore on leave
+    let state_weak_fs_in = Rc::downgrade(state_rc);
+    inner_wv.connect_enter_fullscreen(move |_wv| {
+        if let Some(state_rc) = state_weak_fs_in.upgrade() {
+            if let Ok(state) = state_rc.try_borrow() {
+                state.top_box.hide();
+            }
+        }
+        false
+    });
+    let state_weak_fs_out = Rc::downgrade(state_rc);
+    inner_wv.connect_leave_fullscreen(move |_wv| {
+        if let Some(state_rc) = state_weak_fs_out.upgrade() {
+            if let Ok(state) = state_rc.try_borrow() {
+                state.top_box.show();
+            }
+        }
+        false
     });
 
     let state_weak = Rc::downgrade(state_rc);
@@ -982,6 +1173,9 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 can_go_back: false,
                 can_go_forward: false,
                 is_loading: false,
+                is_pinned: false,
+                is_muted: false,
+                zoom_pct: settings_snapshot.default_zoom.clamp(50, 200),
                 webview,
                 inner: inner_wv,
                 container: tab_box,
@@ -1353,35 +1547,77 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         }
         "zoom_step" => {
             let step_up = msg.id.unwrap_or(1) == 1;
-            let inner = {
-                if let Ok(state) = state_rc.try_borrow() {
-                    state.active_tab_id.and_then(|id| {
-                        state.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone())
-                    })
-                } else {
-                    None
+            let mut updated_id = None;
+            {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    if let Some(active_id) = state.active_tab_id {
+                        if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == active_id) {
+                            let cur = tab.inner.zoom_level();
+                            let next = if step_up { (cur + 0.1).min(3.0) } else { (cur - 0.1).max(0.3) };
+                            tab.inner.set_zoom_level(next);
+                            tab.zoom_pct = (next * 100.0).round() as u32;
+                            updated_id = Some(active_id);
+                        }
+                    }
                 }
-            };
-            if let Some(inner) = inner {
-                let cur = inner.zoom_level();
-                let next = if step_up { (cur + 0.1).min(3.0) } else { (cur - 0.1).max(0.3) };
-                inner.set_zoom_level(next);
+            }
+            if let Some(tid) = updated_id {
+                sync_tab_update_to_ui(state_rc, tid);
             }
         }
         "zoom_reset" => {
-            let (inner, def_zoom) = {
-                if let Ok(state) = state_rc.try_borrow() {
-                    let dz = (state.settings.default_zoom.clamp(50, 200) as f64) / 100.0;
-                    let wv = state.active_tab_id.and_then(|id| {
-                        state.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone())
-                    });
-                    (wv, dz)
-                } else {
-                    (None, 1.0)
+            let mut updated_id = None;
+            {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    let clamped = state.settings.default_zoom.clamp(50, 200);
+                    let dz = (clamped as f64) / 100.0;
+                    if let Some(active_id) = state.active_tab_id {
+                        if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == active_id) {
+                            tab.inner.set_zoom_level(dz);
+                            tab.zoom_pct = clamped;
+                            updated_id = Some(active_id);
+                        }
+                    }
                 }
-            };
-            if let Some(inner) = inner {
-                inner.set_zoom_level(def_zoom);
+            }
+            if let Some(tid) = updated_id {
+                sync_tab_update_to_ui(state_rc, tid);
+            }
+        }
+        "stage_password" => {
+            if let (Some(origin), Some(pass)) = (msg.url, msg.pass) {
+                let user = msg.title.unwrap_or_default();
+                if !origin.is_empty() && !pass.is_empty() {
+                    let doorhanger = {
+                        if let Ok(mut state) = state_rc.try_borrow_mut() {
+                            if state.settings.offer_save_passwords
+                                && !state.passwords.is_already_saved(&origin, &user, &pass)
+                            {
+                                let is_update = state.passwords.items.iter().any(|p| {
+                                    p.origin.eq_ignore_ascii_case(&origin)
+                                        && p.username.eq_ignore_ascii_case(&user)
+                                });
+                                state.pending_password = Some((origin.clone(), user.clone(), pass.clone()));
+                                let js = PasswordsData::build_doorhanger_js(&origin, &user, &pass, is_update);
+                                state.active_tab_id.and_then(|id| {
+                                    state.tabs.iter().find(|t| t.id == id).map(|t| (t.webview.clone(), js))
+                                })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some((wv, js)) = doorhanger {
+                        let _ = wv.evaluate_script(&js);
+                    }
+                }
+            }
+        }
+        "dismiss_pending_password" => {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.pending_password = None;
             }
         }
         "save_password" => {
@@ -1390,7 +1626,138 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 if !origin.is_empty() && !pass.is_empty() {
                     if let Ok(mut state) = state_rc.try_borrow_mut() {
                         state.passwords.add(&origin, &user, &pass);
+                        state.pending_password = None;
                     }
+                }
+            }
+        }
+        "open_find" => {
+            let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+            });
+            if let Some(wv) = wry_wv {
+                let _ = wv.evaluate_script("if (window._ferroOpenFindBar) window._ferroOpenFindBar();");
+            }
+        }
+        "find_text" => {
+            let query = msg.url.unwrap_or_default();
+            let inner = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone()))
+            });
+            if let Some(inner) = inner {
+                if let Some(fc) = inner.find_controller() {
+                    if query.is_empty() {
+                        fc.search_finish();
+                    } else {
+                        let opts = (FindOptions::CASE_INSENSITIVE | FindOptions::WRAP_AROUND).bits();
+                        fc.search(&query, opts, 1000);
+                    }
+                }
+            }
+        }
+        "find_next" => {
+            let inner = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone()))
+            });
+            if let Some(inner) = inner {
+                if let Some(fc) = inner.find_controller() {
+                    fc.search_next();
+                }
+            }
+        }
+        "find_prev" => {
+            let inner = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone()))
+            });
+            if let Some(inner) = inner {
+                if let Some(fc) = inner.find_controller() {
+                    fc.search_previous();
+                }
+            }
+        }
+        "find_clear" => {
+            let inner = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone()))
+            });
+            if let Some(inner) = inner {
+                if let Some(fc) = inner.find_controller() {
+                    fc.search_finish();
+                }
+            }
+        }
+        "print_page" => {
+            let target = state_rc.try_borrow().ok().and_then(|s| {
+                let win = s.window.clone();
+                s.active_tab_id.and_then(|id| {
+                    s.tabs.iter().find(|t| t.id == id).map(|t| (t.inner.clone(), win))
+                })
+            });
+            if let Some((inner, win)) = target {
+                glib::idle_add_local_once(move || {
+                    let print_op = PrintOperation::new(&inner);
+                    let _ = print_op.run_dialog(Some(&win));
+                });
+            }
+        }
+        "toggle_pin_tab" => {
+            if let Some(target_id) = msg.id {
+                {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        if let Some(idx) = state.tabs.iter().position(|t| t.id == target_id) {
+                            let new_pinned = !state.tabs[idx].is_pinned;
+                            state.tabs[idx].is_pinned = new_pinned;
+                            let tab = state.tabs.remove(idx);
+                            if new_pinned {
+                                let insert_pos = state.tabs.iter().take_while(|t| t.is_pinned).count();
+                                state.tabs.insert(insert_pos, tab);
+                            } else {
+                                let insert_pos = state.tabs.iter().take_while(|t| t.is_pinned).count();
+                                state.tabs.insert(insert_pos, tab);
+                            }
+                        }
+                    }
+                }
+                sync_tabs_to_ui(state_rc);
+            }
+        }
+        "toggle_mute_tab" => {
+            if let Some(target_id) = msg.id {
+                {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == target_id) {
+                            tab.is_muted = !tab.is_muted;
+                            tab.inner.set_is_muted(tab.is_muted);
+                        }
+                    }
+                }
+                sync_tab_update_to_ui(state_rc, target_id);
+            }
+        }
+        "open_path" => {
+            if let Some(path) = msg.url {
+                if !path.trim().is_empty() {
+                    let _ = std::process::Command::new("xdg-open").arg(path).spawn();
+                }
+            }
+        }
+        "open_downloads_folder" => {
+            let dir = state_rc
+                .try_borrow()
+                .ok()
+                .map(|s| s.settings.download_dir.clone())
+                .unwrap_or_default();
+            let folder = if !dir.trim().is_empty() {
+                std::path::PathBuf::from(dir)
+            } else {
+                dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            };
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = std::process::Command::new("xdg-open").arg(folder).spawn();
+        }
+        "clear_downloads" => {
+            if let Ok(state) = state_rc.try_borrow() {
+                if let Ok(mut dl) = state.downloads.lock() {
+                    dl.clear();
                 }
             }
         }
@@ -1618,6 +1985,17 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 let state_weak = Rc::downgrade(state_rc);
                 glib::idle_add_local_once(move || {
                     if let Some(state_rc) = state_weak.upgrade() {
+                        let (is_pinned, is_muted) = state_rc
+                            .try_borrow()
+                            .ok()
+                            .and_then(|st| {
+                                st.tabs
+                                    .iter()
+                                    .find(|t| t.id == tab_id)
+                                    .map(|t| (t.is_pinned, t.is_muted))
+                            })
+                            .unwrap_or((false, false));
+
                         let menu = gtk::Menu::new();
 
                         let item_new = gtk::MenuItem::with_label("Новая вкладка                   Ctrl+T");
@@ -1646,6 +2024,44 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         });
                         menu.append(&item_dup);
 
+                        let pin_lbl = if is_pinned {
+                            "Открепить вкладку"
+                        } else {
+                            "Закрепить вкладку"
+                        };
+                        let item_pin = gtk::MenuItem::with_label(pin_lbl);
+                        let s_rc = state_rc.clone();
+                        item_pin.connect_activate(move |_| {
+                            handle_ipc(&s_rc, IpcMessage {
+                                action: "toggle_pin_tab".to_string(),
+                                url: None,
+                                id: Some(tab_id),
+                                title: None,
+                                pass: None,
+                                settings: None,
+                            });
+                        });
+                        menu.append(&item_pin);
+
+                        let mute_lbl = if is_muted {
+                            "Включить звук вкладки"
+                        } else {
+                            "Выключить звук вкладки"
+                        };
+                        let item_mute = gtk::MenuItem::with_label(mute_lbl);
+                        let s_rc = state_rc.clone();
+                        item_mute.connect_activate(move |_| {
+                            handle_ipc(&s_rc, IpcMessage {
+                                action: "toggle_mute_tab".to_string(),
+                                url: None,
+                                id: Some(tab_id),
+                                title: None,
+                                pass: None,
+                                settings: None,
+                            });
+                        });
+                        menu.append(&item_mute);
+
                         menu.append(&gtk::SeparatorMenuItem::new());
 
                         let item_close_others = gtk::MenuItem::with_label("Закрыть другие вкладки");
@@ -1653,7 +2069,13 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         item_close_others.connect_activate(move |_| {
                             let other_ids: Vec<u32> = s_rc
                                 .try_borrow()
-                                .map(|st| st.tabs.iter().filter(|t| t.id != tab_id).map(|t| t.id).collect())
+                                .map(|st| {
+                                    st.tabs
+                                        .iter()
+                                        .filter(|t| t.id != tab_id && !t.is_pinned)
+                                        .map(|t| t.id)
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             for oid in other_ids {
                                 close_tab(&s_rc, oid);
@@ -1750,6 +2172,15 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     });
                     menu.append(&item_new_tab);
 
+                    let item_reopen = gtk::MenuItem::with_label("Восстановить вкладку   Ctrl+Shift+T");
+                    let s_rc = state_rc.clone();
+                    item_reopen.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "reopen_closed_tab".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_reopen);
+
+                    menu.append(&gtk::SeparatorMenuItem::new());
+
                     let item_history = gtk::MenuItem::with_label("История просмотров         Ctrl+H");
                     let s_rc = state_rc.clone();
                     item_history.connect_activate(move |_| {
@@ -1757,12 +2188,42 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     });
                     menu.append(&item_history);
 
-                    let item_passwords = gtk::MenuItem::with_label("Пароли и Google");
+                    let item_downloads = gtk::MenuItem::with_label("Загрузки                             Ctrl+J");
+                    let s_rc = state_rc.clone();
+                    item_downloads.connect_activate(move |_| {
+                        create_tab(&s_rc, "ferro://downloads");
+                    });
+                    menu.append(&item_downloads);
+
+                    let item_passwords = gtk::MenuItem::with_label("Менеджер паролей");
                     let s_rc = state_rc.clone();
                     item_passwords.connect_activate(move |_| {
                         create_tab(&s_rc, "ferro://passwords");
                     });
                     menu.append(&item_passwords);
+
+                    menu.append(&gtk::SeparatorMenuItem::new());
+
+                    let item_find = gtk::MenuItem::with_label("Найти на странице            Ctrl+F");
+                    let s_rc = state_rc.clone();
+                    item_find.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "open_find".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_find);
+
+                    let item_print = gtk::MenuItem::with_label("Печать / Сохранить PDF   Ctrl+P");
+                    let s_rc = state_rc.clone();
+                    item_print.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "print_page".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_print);
+
+                    let item_shot = gtk::MenuItem::with_label("Снимок экрана");
+                    let s_rc = state_rc.clone();
+                    item_shot.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "take_screenshot".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_shot);
 
                     menu.append(&gtk::SeparatorMenuItem::new());
 
@@ -1810,8 +2271,8 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     };
 
                     if let Some((gdk_win, win_w)) = win_info {
-                        let menu_x = (win_w - 240).max(10);
-                        let rect = gtk::gdk::Rectangle::new(menu_x, 74, 230, 1);
+                        let menu_x = (win_w - 255).max(10);
+                        let rect = gtk::gdk::Rectangle::new(menu_x, 74, 245, 1);
                         menu.popup_at_rect(
                             &gdk_win,
                             &rect,
@@ -1976,6 +2437,7 @@ fn main() {
     let bookmarks_dirty = Arc::new(AtomicBool::new(false));
     let history_dirty = Arc::new(AtomicBool::new(false));
     let passwords_dirty = Arc::new(AtomicBool::new(false));
+    let downloads = Arc::new(Mutex::new(DownloadsData::load_or_default()));
     let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let initial_settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string());
     let initial_surface_rgba = compute_surface_rgba(&settings);
@@ -1993,6 +2455,7 @@ fn main() {
         bookmarks,
         history,
         passwords,
+        downloads,
         settings,
         web_context,
         adblocker,
@@ -2000,6 +2463,7 @@ fn main() {
         dark_mode: false,
         theme: theme_mode,
         download_handler_attached: false,
+        pending_password: None,
         settings_dirty: settings_dirty.clone(),
         bookmarks_dirty: bookmarks_dirty.clone(),
         history_dirty: history_dirty.clone(),
@@ -2037,45 +2501,74 @@ fn main() {
         glib::ControlFlow::Continue
     });
 
-    // Compile native WebKit content blocking rules (uBlock / EasyList format)
-    let state_for_filter = state.clone();
+    // Fast-path cached WebKit filter load; background compilation ONLY when cache is missing/outdated!
     let store_dir = AdBlocker::filter_store_dir();
     let store_dir_str = store_dir.to_string_lossy().to_string();
-    let rules_json = AdBlocker::compile_webkit_rules_json();
+    let stamp_path = store_dir.join("rules.stamp");
+    const FILTER_STAMP: &str = "ferro-webkit-rules-v2";
+    let stamp_ok = std::fs::read_to_string(&stamp_path)
+        .map(|s| s.trim() == FILTER_STAMP)
+        .unwrap_or(false);
 
-    // Fast load pre-existing filter if available
     let state_for_load = state.clone();
-    let store_dir_str_clone = store_dir_str.clone();
-    load_filter(&store_dir_str_clone, "ferro_adblock", move |filter_opt| {
-        if let Some(filter) = filter_opt {
-            println!("[Ferro AdBlock] Pre-compiled native WebKit filter loaded!");
-            glib::idle_add_local_once(move || {
-                if let Ok(mut state) = state_for_load.try_borrow_mut() {
-                    if state.adblocker.is_enabled() {
-                        for tab in &state.tabs {
-                            if let Some(ucm) = tab.inner.user_content_manager() {
-                                attach_to_ucm(&ucm, &filter);
+    let store_dir_for_load = store_dir_str.clone();
+    let stamp_path_clone = stamp_path.clone();
+    load_filter(&store_dir_str, "ferro_adblock", move |filter_opt| {
+        if stamp_ok {
+            if let Some(filter) = filter_opt {
+                println!("[Ferro AdBlock] Cached native WebKit filter attached immediately!");
+                glib::idle_add_local_once(move || {
+                    if let Ok(mut st) = state_for_load.try_borrow_mut() {
+                        if st.adblocker.is_enabled() {
+                            for tab in &st.tabs {
+                                if let Some(ucm) = tab.inner.user_content_manager() {
+                                    attach_to_ucm(&ucm, &filter);
+                                }
                             }
                         }
+                        st.native_filter = Some(filter);
                     }
-                    state.native_filter = Some(filter);
-                }
-            });
+                });
+                return;
+            }
         }
-    });
 
-    save_filter(&store_dir_str, "ferro_adblock", &rules_json, move |filter| {
-        println!("[Ferro AdBlock] Native WebKit uBlock filter updated and active!");
-        glib::idle_add_local_once(move || {
-            if let Ok(mut state) = state_for_filter.try_borrow_mut() {
-                if state.adblocker.is_enabled() {
-                    for tab in &state.tabs {
-                        if let Some(ucm) = tab.inner.user_content_manager() {
-                            attach_to_ucm(&ucm, &filter);
+        // Compile rules JSON on a background worker thread so GTK UI startup is never blocked
+        let state_weak = Rc::downgrade(&state_for_load);
+        let store_dir_bg = store_dir_for_load.clone();
+        let stamp_bg = stamp_path_clone.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let compiled = AdBlocker::compile_webkit_rules_json();
+            let _ = tx.send(compiled);
+        });
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            match rx.try_recv() {
+                Ok(rules_json) => {
+                    let state_weak_inner = state_weak.clone();
+                    let stamp_done = stamp_bg.clone();
+                    save_filter(&store_dir_bg, "ferro_adblock", &rules_json, move |filter| {
+                        let _ = std::fs::write(&stamp_done, FILTER_STAMP);
+                        println!("[Ferro AdBlock] Background WebKit uBlock filter compiled and cached!");
+                        if let Some(state_rc) = state_weak_inner.upgrade() {
+                            glib::idle_add_local_once(move || {
+                                if let Ok(mut st) = state_rc.try_borrow_mut() {
+                                    if st.adblocker.is_enabled() {
+                                        for tab in &st.tabs {
+                                            if let Some(ucm) = tab.inner.user_content_manager() {
+                                                attach_to_ucm(&ucm, &filter);
+                                            }
+                                        }
+                                    }
+                                    st.native_filter = Some(filter);
+                                }
+                            });
                         }
-                    }
+                    });
+                    glib::ControlFlow::Break
                 }
-                state.native_filter = Some(filter);
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
             }
         });
     });
@@ -2195,6 +2688,29 @@ fn main() {
                 return glib::Propagation::Stop;
             } else if key == gdk::keys::constants::h || key == gdk::keys::constants::H || key == gdk::keys::constants::Cyrillic_er || key == gdk::keys::constants::Cyrillic_ER {
                 create_tab(&state_for_keys, "ferro://history");
+                return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::j || key == gdk::keys::constants::J || key == gdk::keys::constants::Cyrillic_o || key == gdk::keys::constants::Cyrillic_O {
+                create_tab(&state_for_keys, "ferro://downloads");
+                return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::f || key == gdk::keys::constants::F || key == gdk::keys::constants::Cyrillic_a || key == gdk::keys::constants::Cyrillic_A {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "open_find".to_string(),
+                    url: None,
+                    id: None,
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
+                return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::p || key == gdk::keys::constants::P || key == gdk::keys::constants::Cyrillic_ze || key == gdk::keys::constants::Cyrillic_ZE {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "print_page".to_string(),
+                    url: None,
+                    id: None,
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
                 return glib::Propagation::Stop;
             } else if key == gdk::keys::constants::d || key == gdk::keys::constants::D || key == gdk::keys::constants::Cyrillic_ve || key == gdk::keys::constants::Cyrillic_VE {
                 handle_ipc(&state_for_keys, IpcMessage {

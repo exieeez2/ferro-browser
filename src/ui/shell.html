@@ -155,6 +155,50 @@
       border-left: 1px solid transparent;
     }
 
+    .tab.pinned {
+      width: 40px;
+      min-width: 40px;
+      max-width: 40px;
+      padding: 0;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .tab-mute-btn {
+      width: 16px;
+      height: 16px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      border-radius: var(--radius-ctrl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .tab-mute-btn:hover {
+      background: var(--bg-active);
+      color: var(--text-primary);
+    }
+
+    .zoom-badge {
+      height: 19px;
+      padding: 0 5px;
+      border: 1px solid var(--border-hairline);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-radius: var(--radius-ctrl);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+    }
+    .zoom-badge.visible {
+      display: inline-flex;
+    }
+
     .tab:hover:not(.active) {
       background: var(--bg-hover);
       color: var(--text-primary);
@@ -690,6 +734,13 @@
         </button>
         <input type="text" class="omnibox-input" id="omniboxInput" placeholder="Найти в Google или ввести адрес..." autocomplete="off" />
         <div class="omnibox-actions">
+          <button type="button" class="zoom-badge" id="zoomBadge" title="Сбросить масштаб (Ctrl+0)">100%</button>
+          <button type="button" class="omni-icon-btn" id="findBtn" title="Найти на странице (Ctrl+F)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </button>
           <button type="button" class="omni-icon-btn" id="translateBtn" title="Перевести страницу">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
               <path d="M5 8l6 6"></path>
@@ -707,6 +758,13 @@
       <div class="omni-engine-bar" id="omniEngineBar"></div>
 
       <div class="nav-group">
+        <button class="icon-btn" id="downloadsQuickBtn" title="Загрузки (Ctrl+J)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+        </button>
         <button class="icon-btn" id="settingsQuickBtn" title="Настройки браузера">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
             <circle cx="12" cy="12" r="3"></circle>
@@ -920,35 +978,57 @@
         .replace(/"/g, '&quot;');
     }
 
+    const SVG_MUTED = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
+
+    function getHostKey(url) {
+      if (!url || url.startsWith('ferro://')) return url || '';
+      try { return new URL(url).hostname; } catch(e) { return url; }
+    }
+
     function renderTabs() {
       const shouldScrollToActive = state.newTabId !== null;
       tabsContainer.innerHTML = '';
-      state.tabs.forEach(tab => {
+
+      // Sort pinned tabs to the left
+      const ordered = state.tabs.slice().sort((a, b) => (b.isPinned ? 1 : 0) - (a.isPinned ? 1 : 0));
+
+      ordered.forEach(tab => {
         const el = document.createElement('div');
         const isActive = tab.id === state.activeTabId;
         const isNew = tab.id === state.newTabId;
-        el.className = 'tab' + (isActive ? ' active' : '') + (isNew ? ' tab-new' : '');
+        el.dataset.tabId = String(tab.id);
+        el.dataset.hostKey = getHostKey(tab.url);
+        el.className = 'tab' + (isActive ? ' active' : '') + (isNew ? ' tab-new' : '') + (tab.isPinned ? ' pinned' : '');
 
         const iconHtml = getSiteIconHtml(tab.url, tab.title);
         const titleText = tab.title || (tab.url === 'ferro://newtab' ? 'Новая вкладка' : (tab.url || 'Новая вкладка'));
+        el.title = titleText;
 
-        el.innerHTML = `
-          <span class="tab-favicon">${iconHtml}</span>
-          <span class="tab-title">${escapeHtml(titleText)}</span>
-          <button class="tab-close" title="Закрыть вкладку (Ctrl+W)">${SVG_CLOSE_TAB}</button>
-        `;
+        if (tab.isPinned) {
+          el.innerHTML = `<span class="tab-favicon">${iconHtml}</span>`;
+        } else {
+          el.innerHTML = `
+            <span class="tab-favicon">${iconHtml}</span>
+            <span class="tab-title">${escapeHtml(titleText)}</span>
+            ${tab.isMuted ? `<button class="tab-mute-btn" title="Включить звук вкладки">${SVG_MUTED}</button>` : ''}
+            <button class="tab-close" title="Закрыть вкладку (Ctrl+W)">${SVG_CLOSE_TAB}</button>
+          `;
+        }
 
         el.addEventListener('click', (e) => {
           if (e.target.closest('.tab-close')) {
             e.stopPropagation();
             sendIpc({ action: 'close_tab', id: tab.id });
+          } else if (e.target.closest('.tab-mute-btn')) {
+            e.stopPropagation();
+            sendIpc({ action: 'toggle_mute_tab', id: tab.id });
           } else {
             sendIpc({ action: 'switch_tab', id: tab.id });
           }
         });
 
         el.addEventListener('auxclick', (e) => {
-          if (e.button === 1) {
+          if (e.button === 1 && !tab.isPinned) {
             e.preventDefault();
             e.stopPropagation();
             sendIpc({ action: 'close_tab', id: tab.id });
@@ -1005,11 +1085,9 @@
       });
     }
 
-    function render() {
-      renderTabs();
-      renderBookmarks();
-      renderEngineUI();
+    const zoomBadge = document.getElementById('zoomBadge');
 
+    function syncActiveToolbarState() {
       const active = getActiveTab();
       if (active) {
         if (document.activeElement !== omniboxInput) {
@@ -1022,11 +1100,16 @@
         bookmarkBtn.innerHTML = isBookmarked ? SVG_STAR_FILLED : SVG_STAR_OUTLINE;
         bookmarkBtn.classList.toggle('active', isBookmarked);
 
-        if (active.isLoading) {
-          loadingBar.classList.add('active');
+        const defZoom = (state.settings && state.settings.default_zoom) || 100;
+        const curZoom = active.zoomPct || defZoom;
+        if (curZoom !== defZoom) {
+          zoomBadge.textContent = curZoom + '%';
+          zoomBadge.classList.add('visible');
         } else {
-          loadingBar.classList.remove('active');
+          zoomBadge.classList.remove('visible');
         }
+
+        loadingBar.classList.toggle('active', Boolean(active.isLoading));
       } else {
         if (document.activeElement !== omniboxInput) {
           omniboxInput.value = '';
@@ -1034,8 +1117,14 @@
         backBtn.disabled = true;
         fwdBtn.disabled = true;
         bookmarkBtn.innerHTML = SVG_STAR_OUTLINE;
+        zoomBadge.classList.remove('visible');
         loadingBar.classList.remove('active');
       }
+    }
+
+    function render() {
+      renderTabs();
+      syncActiveToolbarState();
     }
 
     function hexToRgba(hex, alpha) {
@@ -1072,9 +1161,35 @@
 
       updateTab(tabId, data) {
         const tab = state.tabs.find(t => t.id === tabId);
-        if (tab) {
-          Object.assign(tab, data);
-          render();
+        if (!tab) return;
+        const prevPinned = Boolean(tab.isPinned);
+        const prevMuted = Boolean(tab.isMuted);
+        Object.assign(tab, data);
+
+        // Full tab re-render only if pin/mute structure changed
+        if (Boolean(tab.isPinned) !== prevPinned || Boolean(tab.isMuted) !== prevMuted) {
+          renderTabs();
+        } else {
+          // Surgical O(1) DOM update without recreating favicons or bookmarks!
+          const el = tabsContainer.querySelector(`[data-tab-id="${tabId}"]`);
+          if (el) {
+            const titleText = tab.title || (tab.url === 'ferro://newtab' ? 'Новая вкладка' : (tab.url || 'Новая вкладка'));
+            el.title = titleText;
+            const titleEl = el.querySelector('.tab-title');
+            if (titleEl && titleEl.textContent !== titleText) {
+              titleEl.textContent = titleText;
+            }
+            const nextHost = getHostKey(tab.url);
+            if (el.dataset.hostKey !== nextHost) {
+              el.dataset.hostKey = nextHost;
+              const favEl = el.querySelector('.tab-favicon');
+              if (favEl) favEl.innerHTML = getSiteIconHtml(tab.url, tab.title);
+            }
+          }
+        }
+
+        if (tabId === state.activeTabId) {
+          syncActiveToolbarState();
         }
       },
 
@@ -1233,6 +1348,20 @@
       }
     });
 
+    document.getElementById('zoomBadge').addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendIpc({ action: 'zoom_reset' });
+    });
+
+    document.getElementById('findBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendIpc({ action: 'open_find' });
+    });
+
+    document.getElementById('downloadsQuickBtn').addEventListener('click', () => {
+      sendIpc({ action: 'new_tab', url: 'ferro://downloads' });
+    });
+
     document.getElementById('settingsQuickBtn').addEventListener('click', () => {
       sendIpc({ action: 'new_tab', url: 'ferro://settings' });
     });
@@ -1277,6 +1406,21 @@
     });
 
     window.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А' || e.code === 'KeyF')) {
+        e.preventDefault();
+        sendIpc({ action: 'open_find' });
+        return;
+      }
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'j' || e.key === 'J' || e.key === 'о' || e.key === 'О' || e.code === 'KeyJ')) {
+        e.preventDefault();
+        sendIpc({ action: 'new_tab', url: 'ferro://downloads' });
+        return;
+      }
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P' || e.key === 'з' || e.key === 'З' || e.code === 'KeyP')) {
+        e.preventDefault();
+        sendIpc({ action: 'print_page' });
+        return;
+      }
       if (e.ctrlKey && e.shiftKey && (e.key === 'b' || e.key === 'B' || e.key === 'и' || e.key === 'И' || e.code === 'KeyB')) {
         e.preventDefault();
         state.settings.show_bookmarks_bar = state.settings.show_bookmarks_bar === false ? true : false;

@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+static DETECTED_CACHE: OnceLock<Vec<DetectedBrowser>> = OnceLock::new();
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DetectedBrowser {
@@ -27,6 +30,10 @@ pub struct BrowserImporter;
 
 impl BrowserImporter {
     pub fn detect_all() -> Vec<DetectedBrowser> {
+        DETECTED_CACHE.get_or_init(Self::scan_all_profiles).clone()
+    }
+
+    fn scan_all_profiles() -> Vec<DetectedBrowser> {
         let mut list = Vec::new();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/exieeez"));
 
