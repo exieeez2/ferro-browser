@@ -262,6 +262,15 @@
       text-align: left;
     }
 
+    .tab.sleeping .tab-favicon,
+    .tab.sleeping .tab-title {
+      opacity: 0.52;
+    }
+
+    .tab.drag-over {
+      box-shadow: inset 2px 0 0 var(--accent);
+    }
+
     .tab-close {
       width: 18px;
       height: 18px;
@@ -735,6 +744,30 @@
         <input type="text" class="omnibox-input" id="omniboxInput" placeholder="Найти в Google или ввести адрес..." autocomplete="off" />
         <div class="omnibox-actions">
           <button type="button" class="zoom-badge" id="zoomBadge" title="Сбросить масштаб (Ctrl+0)">100%</button>
+          <button type="button" class="omni-icon-btn" id="lensBtn" title="Найти с помощью Google Объектива">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M9 3H6a3 3 0 0 0-3 3v3" stroke="#4285F4" stroke-width="2.2" stroke-linecap="round"></path>
+              <path d="M15 3h3a3 3 0 0 1 3 3v3" stroke="#EA4335" stroke-width="2.2" stroke-linecap="round"></path>
+              <path d="M9 21H6a3 3 0 0 1-3-3v-3" stroke="#FBBC05" stroke-width="2.2" stroke-linecap="round"></path>
+              <circle cx="12" cy="12" r="3.4" fill="#4285F4"></circle>
+              <circle cx="17.5" cy="17.5" r="2.2" fill="#34A853"></circle>
+            </svg>
+          </button>
+          <button type="button" class="omni-icon-btn" id="readerBtn" title="Режим чтения (Alt+R)">
+            <svg width="13.5" height="13.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+            </svg>
+          </button>
+          <button type="button" class="omni-icon-btn" id="qrBtn" title="QR-код страницы">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+              <rect x="14" y="14" width="3" height="3"></rect>
+              <path d="M21 14h-2v3h2v4h-4v-2"></path>
+            </svg>
+          </button>
           <button type="button" class="omni-icon-btn" id="findBtn" title="Найти на странице (Ctrl+F)">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"></circle>
@@ -758,6 +791,12 @@
       <div class="omni-engine-bar" id="omniEngineBar"></div>
 
       <div class="nav-group">
+        <button class="icon-btn" id="sidePanelBtn" title="Боковая панель (Объектив, Заметки, Закладки)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+            <line x1="15" y1="3" x2="15" y2="21"></line>
+          </svg>
+        </button>
         <button class="icon-btn" id="downloadsQuickBtn" title="Загрузки (Ctrl+J)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -998,7 +1037,12 @@
         const isNew = tab.id === state.newTabId;
         el.dataset.tabId = String(tab.id);
         el.dataset.hostKey = getHostKey(tab.url);
-        el.className = 'tab' + (isActive ? ' active' : '') + (isNew ? ' tab-new' : '') + (tab.isPinned ? ' pinned' : '');
+        el.className = 'tab'
+          + (isActive ? ' active' : '')
+          + (isNew ? ' tab-new' : '')
+          + (tab.isPinned ? ' pinned' : '')
+          + (tab.isSleeping ? ' sleeping' : '');
+        el.draggable = !tab.isPinned;
 
         const iconHtml = getSiteIconHtml(tab.url, tab.title);
         const titleText = tab.title || (tab.url === 'ferro://newtab' ? 'Новая вкладка' : (tab.url || 'Новая вкладка'));
@@ -1040,6 +1084,38 @@
           e.stopPropagation();
           sendIpc({ action: 'tab_context_menu', id: tab.id, url: tab.url });
         });
+
+        // Drag-and-drop tab reordering
+        if (!tab.isPinned) {
+          el.addEventListener('dragstart', (e) => {
+            state.draggedTabId = tab.id;
+            e.dataTransfer.effectAllowed = 'move';
+          });
+          el.addEventListener('dragover', (e) => {
+            if (state.draggedTabId && state.draggedTabId !== tab.id) {
+              e.preventDefault();
+              el.classList.add('drag-over');
+            }
+          });
+          el.addEventListener('dragleave', () => {
+            el.classList.remove('drag-over');
+          });
+          el.addEventListener('drop', (e) => {
+            e.preventDefault();
+            el.classList.remove('drag-over');
+            const fromId = state.draggedTabId;
+            state.draggedTabId = null;
+            if (!fromId || fromId === tab.id) return;
+            const fromIdx = state.tabs.findIndex(t => t.id === fromId);
+            const toIdx = state.tabs.findIndex(t => t.id === tab.id);
+            if (fromIdx >= 0 && toIdx >= 0) {
+              const [moved] = state.tabs.splice(fromIdx, 1);
+              state.tabs.splice(toIdx, 0, moved);
+              renderTabs();
+              sendIpc({ action: 'reorder_tabs', url: state.tabs.map(t => t.id).join(',') });
+            }
+          });
+        }
 
         tabsContainer.appendChild(el);
         if (isActive && shouldScrollToActive) {
@@ -1173,6 +1249,7 @@
           // Surgical O(1) DOM update without recreating favicons or bookmarks!
           const el = tabsContainer.querySelector(`[data-tab-id="${tabId}"]`);
           if (el) {
+            el.classList.toggle('sleeping', Boolean(tab.isSleeping));
             const titleText = tab.title || (tab.url === 'ferro://newtab' ? 'Новая вкладка' : (tab.url || 'Новая вкладка'));
             el.title = titleText;
             const titleEl = el.querySelector('.tab-title');
@@ -1353,9 +1430,28 @@
       sendIpc({ action: 'zoom_reset' });
     });
 
+    document.getElementById('lensBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendIpc({ action: 'open_lens_overlay' });
+    });
+
+    document.getElementById('readerBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendIpc({ action: 'toggle_reader' });
+    });
+
+    document.getElementById('qrBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendIpc({ action: 'show_qr' });
+    });
+
     document.getElementById('findBtn').addEventListener('click', (e) => {
       e.stopPropagation();
       sendIpc({ action: 'open_find' });
+    });
+
+    document.getElementById('sidePanelBtn').addEventListener('click', () => {
+      sendIpc({ action: 'toggle_side_panel' });
     });
 
     document.getElementById('downloadsQuickBtn').addEventListener('click', () => {
@@ -1369,6 +1465,36 @@
     document.getElementById('minBtn').addEventListener('click', () => sendIpc({ action: 'window_min' }));
     document.getElementById('maxBtn').addEventListener('click', () => sendIpc({ action: 'window_max' }));
     document.getElementById('closeWinBtn').addEventListener('click', () => sendIpc({ action: 'window_close' }));
+
+    // Chrome-style inline URL domain autocomplete
+    const TOP_DOMAINS = [
+      'google.com', 'youtube.com', 'github.com', 'reddit.com', 'wikipedia.org',
+      'ya.ru', 'habr.com', 'telegram.org', 'web.telegram.org', 'archlinux.org',
+      'duckduckgo.com', 'chatgpt.com', 'twitch.tv', 'vk.com', 'stackoverflow.com'
+    ];
+
+    omniboxInput.addEventListener('input', (e) => {
+      if (e.inputType && (e.inputType.startsWith('delete') || e.inputType === 'insertFromPaste')) return;
+      const val = omniboxInput.value;
+      if (!val || val.length < 2 || val.includes(' ') || omniboxInput.selectionStart !== val.length) return;
+      const lower = val.toLowerCase();
+
+      const pool = [];
+      (state.bookmarks || []).forEach(b => {
+        try {
+          const u = new URL(b.url);
+          const clean = u.hostname.replace(/^www\./, '') + (u.pathname !== '/' ? u.pathname : '');
+          pool.push(clean);
+        } catch (_) {}
+      });
+      TOP_DOMAINS.forEach(d => pool.push(d));
+
+      const match = pool.find(item => item.toLowerCase().startsWith(lower) && item.length > val.length);
+      if (match) {
+        omniboxInput.value = val + match.slice(val.length);
+        omniboxInput.setSelectionRange(val.length, match.length);
+      }
+    });
 
     // Omnibox Navigation using active Search Engine
     document.getElementById('omniboxForm').addEventListener('submit', (e) => {

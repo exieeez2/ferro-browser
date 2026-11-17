@@ -1244,12 +1244,19 @@ pub const TRANSLATE_PAGE_JS: &str = r#"
 
 
 
-pub const CONTEXT_MENU_JS: &str = r#"
+pub const CONTEXT_MENU_JS: &str = r##"
 (function() {
     if (window._ferro_context_menu_installed) return;
     window._ferro_context_menu_installed = true;
 
     const HOST_ID = 'ferro-ctx-host';
+    const LENS_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 3H6a3 3 0 0 0-3 3v3" stroke="#4285F4" stroke-width="2.2" stroke-linecap="round"/><path d="M15 3h3a3 3 0 0 1 3 3v3" stroke="#EA4335" stroke-width="2.2" stroke-linecap="round"/><path d="M9 21H6a3 3 0 0 1-3-3v-3" stroke="#FBBC05" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.4" fill="#4285F4"/><circle cx="17.5" cy="17.5" r="2.2" fill="#34A853"/></svg>`;
+
+    const TRACKING_PARAMS = new Set([
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+        'fbclid', 'gclid', 'yclid', 'dclid', 'msclkid', 'twclid', 'igshid', 'mc_cid',
+        'mc_eid', '_hsenc', '_hsmi', 'spm', 'si', 'feature', 'ref_src', 'vero_id'
+    ]);
 
     function postIpc(payload) {
         if (window.ipc) {
@@ -1259,14 +1266,26 @@ pub const CONTEXT_MENU_JS: &str = r#"
         return false;
     }
 
-    function copyToClipboard(text) {
+    function showToast(msg) {
+        try {
+            const old = document.getElementById('ferro-mini-toast');
+            if (old) old.remove();
+            const t = document.createElement('div');
+            t.id = 'ferro-mini-toast';
+            t.textContent = msg;
+            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#1b1b20;color:#f2f2f5;border:1px solid #383844;border-radius:6px;padding:8px 14px;font-family:Inter,-apple-system,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);pointer-events:none;';
+            (document.body || document.documentElement).appendChild(t);
+            setTimeout(() => t.remove(), 2200);
+        } catch (e) {}
+    }
+
+    function copyToClipboard(text, toastMsg) {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).catch(() => {
-                fallbackCopy(text);
-            });
+            navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
         } else {
             fallbackCopy(text);
         }
+        if (toastMsg) showToast(toastMsg);
     }
 
     function fallbackCopy(text) {
@@ -1281,6 +1300,484 @@ pub const CONTEXT_MENU_JS: &str = r#"
         } catch (e) {}
     }
 
+    function cleanUrlParams(rawUrl) {
+        try {
+            const u = new URL(rawUrl, window.location.href);
+            for (const key of Array.from(u.searchParams.keys())) {
+                if (TRACKING_PARAMS.has(key.toLowerCase()) || key.toLowerCase().startsWith('utm_')) {
+                    u.searchParams.delete(key);
+                }
+            }
+            return u.toString();
+        } catch (e) {
+            return rawUrl;
+        }
+    }
+
+    function getSearchEngineInfo() {
+        const cfg = window._ferro_settings || {};
+        const key = cfg.search_engine || 'google';
+        const map = {
+            google: ['Google', 'https://www.google.com/search?q='],
+            duckduckgo: ['DuckDuckGo', 'https://duckduckgo.com/?q='],
+            yandex: ['Яндекс', 'https://ya.ru/search/?text='],
+            bing: ['Bing', 'https://www.bing.com/search?q='],
+            brave: ['Brave', 'https://search.brave.com/search?q='],
+            youtube: ['YouTube', 'https://www.youtube.com/results?search_query='],
+            github: ['GitHub', 'https://github.com/search?q=']
+        };
+        return map[key] || map.google;
+    }
+
+    // Search a specific <img> or image URL with Google Lens (1:1 like Chrome Side Panel)
+    function searchImageWithLens(imgEl, imgSrc) {
+        // 1. Try lossless canvas capture (works on same-origin, CORS, data:, blob:)
+        if (imgEl && imgEl.naturalWidth > 8 && imgEl.naturalHeight > 8) {
+            try {
+                const maxDim = 1280;
+                let w = imgEl.naturalWidth;
+                let h = imgEl.naturalHeight;
+                if (w > maxDim || h > maxDim) {
+                    const ratio = Math.min(maxDim / w, maxDim / h);
+                    w = Math.round(w * ratio);
+                    h = Math.round(h * ratio);
+                }
+                const c = document.createElement('canvas');
+                c.width = w;
+                c.height = h;
+                const ctx = c.getContext('2d');
+                ctx.drawImage(imgEl, 0, 0, w, h);
+                const dataUrl = c.toDataURL('image/png');
+                if (dataUrl && dataUrl.length > 64) {
+                    if (postIpc({ action: 'lens_image_data', title: dataUrl, url: imgSrc || '' })) {
+                        return;
+                    }
+                }
+            } catch (err) {
+                // Cross-origin tainted canvas: capture rendered viewport pixels if visible!
+            }
+
+            const r = imgEl.getBoundingClientRect();
+            const ix = Math.max(0, r.left);
+            const iy = Math.max(0, r.top);
+            const iw = Math.min(window.innerWidth, r.right) - ix;
+            const ih = Math.min(window.innerHeight, r.bottom) - iy;
+            if (iw >= 20 && ih >= 20) {
+                setTimeout(() => {
+                    postIpc({
+                        action: 'lens_capture_rect',
+                        url: JSON.stringify({
+                            x: ix,
+                            y: iy,
+                            w: iw,
+                            h: ih,
+                            vw: window.innerWidth,
+                            vh: window.innerHeight,
+                            fallback: imgSrc || ''
+                        })
+                    });
+                }, 35);
+                return;
+            }
+        }
+
+        if (imgSrc) {
+            if (!postIpc({ action: 'lens_url', url: imgSrc })) {
+                window.open('https://lens.google.com/uploadbyurl?hl=ru&url=' + encodeURIComponent(imgSrc), '_blank');
+            }
+        }
+    }
+
+    // Chrome-exact interactive Google Lens Region Selector Overlay
+    window._ferroStartLensOverlay = function() {
+        const OVERLAY_ID = 'ferro-lens-overlay-host';
+        const existing = document.getElementById(OVERLAY_ID);
+        if (existing) existing.remove();
+
+        const host = document.createElement('div');
+        host.id = OVERLAY_ID;
+        host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;cursor:crosshair;user-select:none;';
+        const shadow = host.attachShadow({ mode: 'open' });
+
+        shadow.innerHTML = `
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+                @keyframes lensGlow {
+                    0% { opacity: 0.85; }
+                    100% { opacity: 0; }
+                }
+                @keyframes pillDrop {
+                    from { opacity: 0; transform: translate(-50%, -10px); }
+                    to { opacity: 1; transform: translate(-50%, 0); }
+                }
+                .stage {
+                    position: fixed;
+                    inset: 0;
+                    cursor: crosshair;
+                    overflow: hidden;
+                }
+                .backdrop-full {
+                    position: fixed;
+                    inset: 0;
+                    background: rgba(12, 15, 24, 0.34);
+                    pointer-events: none;
+                }
+                .ambient-flash {
+                    position: fixed;
+                    inset: 0;
+                    box-shadow: inset 0 0 68px rgba(66, 133, 244, 0.48), inset 0 0 28px rgba(161, 66, 244, 0.35);
+                    pointer-events: none;
+                    animation: lensGlow 0.65s ease-out forwards;
+                }
+                .pill {
+                    position: fixed;
+                    top: 18px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    background: rgba(28, 29, 34, 0.94);
+                    color: #f4f4f7;
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 999px;
+                    height: 40px;
+                    padding: 0 10px 0 16px;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                    font-size: 13px;
+                    font-weight: 500;
+                    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+                    backdrop-filter: blur(12px);
+                    animation: pillDrop 0.18s cubic-bezier(0.2, 0, 0, 1);
+                    z-index: 5;
+                    cursor: default;
+                }
+                .close-btn {
+                    width: 26px;
+                    height: 26px;
+                    border: none;
+                    border-radius: 50%;
+                    background: rgba(255, 255, 255, 0.08);
+                    color: #e4e4e9;
+                    cursor: pointer;
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 13px;
+                    transition: background 0.12s;
+                }
+                .close-btn:hover {
+                    background: rgba(255, 255, 255, 0.2);
+                }
+                .hover-img-ring {
+                    position: fixed;
+                    border: 2px solid rgba(255, 255, 255, 0.85);
+                    border-radius: 10px;
+                    box-shadow: 0 0 0 1px rgba(66, 133, 244, 0.5), 0 6px 22px rgba(0, 0, 0, 0.35);
+                    pointer-events: none;
+                    display: none;
+                    transition: all 0.08s ease-out;
+                }
+                .sel-box {
+                    position: fixed;
+                    display: none;
+                    border-radius: 10px;
+                    box-shadow: 0 0 0 9999px rgba(10, 13, 22, 0.48);
+                    pointer-events: none;
+                }
+                /* Chrome's 4 rounded white corner brackets */
+                .corner {
+                    position: absolute;
+                    width: 20px;
+                    height: 20px;
+                    border-color: #ffffff;
+                    border-style: solid;
+                    pointer-events: none;
+                }
+                .c-tl { top: -2px; left: -2px; border-width: 3.5px 0 0 3.5px; border-top-left-radius: 10px; }
+                .c-tr { top: -2px; right: -2px; border-width: 3.5px 3.5px 0 0; border-top-right-radius: 10px; }
+                .c-bl { bottom: -2px; left: -2px; border-width: 0 0 3.5px 3.5px; border-bottom-left-radius: 10px; }
+                .c-br { bottom: -2px; right: -2px; border-width: 0 3.5px 3.5px 0; border-bottom-right-radius: 10px; }
+            </style>
+            <div class="stage" id="stage">
+                <div class="backdrop-full" id="fullDim"></div>
+                <div class="ambient-flash"></div>
+                <div class="hover-img-ring" id="hoverRing"></div>
+                <div class="sel-box" id="selBox">
+                    <div class="corner c-tl"></div>
+                    <div class="corner c-tr"></div>
+                    <div class="corner c-bl"></div>
+                    <div class="corner c-br"></div>
+                </div>
+                <div class="pill" id="topPill">
+                    ${LENS_SVG}
+                    <span>Выделите область для поиска с Google Объективом</span>
+                    <button type="button" class="close-btn" id="cancelLens" title="Закрыть (Esc)">✕</button>
+                </div>
+            </div>
+        `;
+
+        const stage = shadow.getElementById('stage');
+        const fullDim = shadow.getElementById('fullDim');
+        const selBox = shadow.getElementById('selBox');
+        const hoverRing = shadow.getElementById('hoverRing');
+        const topPill = shadow.getElementById('topPill');
+
+        let dragging = false;
+        let startX = 0;
+        let startY = 0;
+        let curRect = null;
+        let hoveredImg = null;
+
+        function cleanup() {
+            window.removeEventListener('keydown', onKey, true);
+            host.remove();
+        }
+
+        function onKey(ev) {
+            if (ev.key === 'Escape') {
+                ev.preventDefault();
+                ev.stopPropagation();
+                cleanup();
+            }
+        }
+        window.addEventListener('keydown', onKey, true);
+
+        shadow.getElementById('cancelLens').addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            cleanup();
+        });
+        topPill.addEventListener('mousedown', (ev) => ev.stopPropagation());
+
+        stage.addEventListener('mousemove', (ev) => {
+            if (!dragging) {
+                // Highlight underlying <img> on hover just like Chrome Lens!
+                host.style.pointerEvents = 'none';
+                const under = document.elementFromPoint(ev.clientX, ev.clientY);
+                host.style.pointerEvents = 'auto';
+                const img = under && under.closest ? (under.closest('img') || (under.tagName === 'IMG' ? under : null)) : null;
+                if (img) {
+                    const r = img.getBoundingClientRect();
+                    if (r.width >= 32 && r.height >= 32) {
+                        hoveredImg = img;
+                        hoverRing.style.display = 'block';
+                        hoverRing.style.left = r.left + 'px';
+                        hoverRing.style.top = r.top + 'px';
+                        hoverRing.style.width = r.width + 'px';
+                        hoverRing.style.height = r.height + 'px';
+                        stage.style.cursor = 'pointer';
+                        return;
+                    }
+                }
+                hoveredImg = null;
+                hoverRing.style.display = 'none';
+                stage.style.cursor = 'crosshair';
+                return;
+            }
+
+            const x = Math.min(startX, ev.clientX);
+            const y = Math.min(startY, ev.clientY);
+            const w = Math.abs(ev.clientX - startX);
+            const h = Math.abs(ev.clientY - startY);
+            curRect = { x, y, w, h };
+
+            if (w > 4 || h > 4) {
+                hoverRing.style.display = 'none';
+                fullDim.style.display = 'none';
+                selBox.style.display = 'block';
+                selBox.style.left = x + 'px';
+                selBox.style.top = y + 'px';
+                selBox.style.width = w + 'px';
+                selBox.style.height = h + 'px';
+            }
+        });
+
+        stage.addEventListener('mousedown', (ev) => {
+            if (ev.button !== 0) return;
+            ev.preventDefault();
+            dragging = true;
+            startX = ev.clientX;
+            startY = ev.clientY;
+            curRect = { x: startX, y: startY, w: 0, h: 0 };
+        });
+
+        window.addEventListener('mouseup', function onUp(ev) {
+            if (!dragging) return;
+            window.removeEventListener('mouseup', onUp, true);
+            dragging = false;
+
+            const finalRect = curRect;
+            // If user clicked directly on a highlighted image without dragging
+            if ((!finalRect || finalRect.w < 12 || finalRect.h < 12) && hoveredImg) {
+                const targetImg = hoveredImg;
+                const src = targetImg.currentSrc || targetImg.src || '';
+                cleanup();
+                searchImageWithLens(targetImg, src);
+                return;
+            }
+
+            if (!finalRect || finalRect.w < 12 || finalRect.h < 12) {
+                fullDim.style.display = 'block';
+                selBox.style.display = 'none';
+                return;
+            }
+
+            // Hide overlay completely before pixel capture so screenshot has crisp original colors
+            host.style.display = 'none';
+            requestAnimationFrame(() => {
+                setTimeout(() => {
+                    cleanup();
+                    postIpc({
+                        action: 'lens_capture_rect',
+                        url: JSON.stringify({
+                            x: finalRect.x,
+                            y: finalRect.y,
+                            w: finalRect.w,
+                            h: finalRect.h,
+                            vw: window.innerWidth,
+                            vh: window.innerHeight
+                        })
+                    });
+                }, 30);
+            });
+        }, true);
+
+        (document.documentElement || document.body).appendChild(host);
+    };
+
+    // Inline Selection Translation Popover
+    function translateSelectionInline(text, x, y) {
+        const POP_ID = 'ferro-sel-trans-host';
+        const old = document.getElementById(POP_ID);
+        if (old) old.remove();
+
+        const host = document.createElement('div');
+        host.id = POP_ID;
+        const left = Math.max(10, Math.min(window.innerWidth - 330, x));
+        const top = Math.max(10, Math.min(window.innerHeight - 160, y + 12));
+        host.style.cssText = `position:fixed;left:${left}px;top:${top}px;z-index:2147483647;`;
+        const shadow = host.attachShadow({ mode: 'open' });
+
+        shadow.innerHTML = `
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+                .card {
+                    width: 316px;
+                    background: #1b1b21;
+                    color: #f2f2f6;
+                    border: 1px solid #353542;
+                    border-radius: 8px;
+                    padding: 12px 14px;
+                    box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+                }
+                .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px; color: #9ca3af; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+                .body { font-size: 13px; line-height: 1.5; max-height: 180px; overflow-y: auto; word-break: break-word; }
+                .btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+                button { height: 26px; padding: 0 10px; border-radius: 4px; border: 1px solid #383846; background: #26262f; color: #ececf1; font-size: 11.5px; cursor: pointer; }
+                button:hover { background: #32323e; }
+            </style>
+            <div class="card">
+                <div class="head">
+                    <span>Перевод (RU)</span>
+                    <button id="clsBtn" style="height:20px;padding:0 6px;border:none;background:transparent;">✕</button>
+                </div>
+                <div class="body" id="trOut">Перевод фрагмента...</div>
+                <div class="btns">
+                    <button id="cpBtn">Копировать</button>
+                </div>
+            </div>
+        `;
+
+        let translatedText = '';
+        shadow.getElementById('clsBtn').addEventListener('click', () => host.remove());
+        shadow.getElementById('cpBtn').addEventListener('click', () => {
+            if (translatedText) copyToClipboard(translatedText, 'Перевод скопирован');
+            host.remove();
+        });
+
+        const closeOut = (ev) => {
+            if (host && ev.target !== host && !host.contains(ev.target)) {
+                document.removeEventListener('mousedown', closeOut, true);
+                host.remove();
+            }
+        };
+        setTimeout(() => document.addEventListener('mousedown', closeOut, true), 50);
+
+        (document.body || document.documentElement).appendChild(host);
+
+        const api = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=' + encodeURIComponent(text.slice(0, 1200));
+        fetch(api)
+            .then(r => r.json())
+            .then(data => {
+                if (Array.isArray(data) && Array.isArray(data[0])) {
+                    translatedText = data[0].map(seg => seg[0] || '').join('');
+                    shadow.getElementById('trOut').textContent = translatedText || 'Не удалось перевести';
+                }
+            })
+            .catch(() => {
+                shadow.getElementById('trOut').textContent = 'Сервис перевода недоступен на этой странице (CSP)';
+            });
+    }
+
+    // Video Picture-in-Picture + Floating Mini-Player fallback
+    window._ferroToggleVideoPiP = function(targetVideo) {
+        const vid = targetVideo || document.querySelector('video');
+        if (!vid) {
+            showToast('Видео на странице не найдено');
+            return;
+        }
+        try {
+            if (document.pictureInPictureElement) {
+                document.exitPictureInPicture();
+                return;
+            }
+            if (typeof vid.webkitSetPresentationMode === 'function') {
+                const cur = vid.webkitPresentationMode;
+                vid.webkitSetPresentationMode(cur === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+                return;
+            }
+            if (typeof vid.requestPictureInPicture === 'function') {
+                vid.requestPictureInPicture().catch(() => toggleMiniDock(vid));
+                return;
+            }
+        } catch (e) {}
+        toggleMiniDock(vid);
+    };
+
+    function toggleMiniDock(vid) {
+        if (vid.dataset.ferroMini === '1') {
+            vid.style.cssText = vid.dataset.ferroOrigStyle || '';
+            delete vid.dataset.ferroMini;
+            showToast('Обычный режим видео');
+        } else {
+            vid.dataset.ferroOrigStyle = vid.getAttribute('style') || '';
+            vid.dataset.ferroMini = '1';
+            vid.style.cssText = 'position:fixed !important;bottom:16px !important;right:16px !important;width:360px !important;height:203px !important;z-index:2147483646 !important;background:#000 !important;border:1px solid #3f3f4a !important;border-radius:8px !important;box-shadow:0 12px 34px rgba(0,0,0,0.75) !important;object-fit:contain !important;';
+            showToast('Мини-плеер поверх страницы включён');
+        }
+    }
+
+    function captureVideoFramePng(vid) {
+        try {
+            const w = vid.videoWidth || vid.clientWidth || 1280;
+            const h = vid.videoHeight || vid.clientHeight || 720;
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            c.getContext('2d').drawImage(vid, 0, 0, w, h);
+            c.toBlob((blob) => {
+                if (!blob) return;
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `video-frame-${Date.now()}.png`;
+                a.click();
+                showToast(`Кадр сохранён (${w}×${h})`);
+            }, 'image/png');
+        } catch (e) {
+            postIpc({ action: 'take_screenshot' });
+        }
+    }
+
     function removeMenu() {
         const old = document.getElementById(HOST_ID);
         if (old) old.remove();
@@ -1293,7 +1790,13 @@ pub const CONTEXT_MENU_JS: &str = r#"
         if (!target) return;
 
         const sel = window.getSelection ? window.getSelection().toString().trim() : '';
-        const imgEl = target.closest ? (target.closest('img') || (target.tagName === 'IMG' ? target : null)) : null;
+
+        // Detect <img> or <video> even beneath transparent overlay controls!
+        const stackEls = document.elementsFromPoint ? document.elementsFromPoint(e.clientX, e.clientY) : [target];
+        const videoEl = stackEls.find(el => el && el.tagName === 'VIDEO') || (target.closest ? target.closest('video') : null);
+        const imgEl = (target.closest ? (target.closest('img') || (target.tagName === 'IMG' ? target : null)) : null)
+            || stackEls.find(el => el && el.tagName === 'IMG');
+
         let imgSrc = '';
         if (imgEl && (imgEl.currentSrc || imgEl.src)) {
             imgSrc = imgEl.currentSrc || imgEl.src;
@@ -1305,16 +1808,15 @@ pub const CONTEXT_MENU_JS: &str = r#"
         const linkEl = target.closest ? target.closest('a[href]') : null;
         const linkUrl = linkEl ? linkEl.href : '';
         const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+        const isInternal = window.location.href.startsWith('ferro://');
 
         e.preventDefault();
         e.stopPropagation();
 
-        // Read Ferro theme settings
         const cfg = window._ferro_settings || {};
         const isLight = cfg.theme_mode === 'light' || document.documentElement.getAttribute('data-theme') === 'light';
         const rad = cfg.corner_radius !== undefined ? Math.max(4, Math.min(16, cfg.corner_radius)) : 6;
         const itemRad = Math.max(2, rad - 2);
-        const accent = cfg.accent_color || (isLight ? '#18181b' : '#ececec');
 
         const items = [];
 
@@ -1323,26 +1825,52 @@ pub const CONTEXT_MENU_JS: &str = r#"
             items.push({
                 label: 'Открыть ссылку в новой вкладке',
                 action: () => {
-                    if (!postIpc({ action: 'new_tab', url: linkUrl })) {
-                        window.open(linkUrl, '_blank');
-                    }
+                    if (!postIpc({ action: 'new_tab', url: linkUrl })) window.open(linkUrl, '_blank');
                 }
             });
             items.push({
                 label: 'Копировать адрес ссылки',
-                action: () => copyToClipboard(linkUrl)
+                action: () => copyToClipboard(linkUrl, 'Ссылка скопирована')
+            });
+            const cleaned = cleanUrlParams(linkUrl);
+            if (cleaned !== linkUrl) {
+                items.push({
+                    label: 'Копировать чистую ссылку (без меток)',
+                    action: () => copyToClipboard(cleaned, 'Чистая ссылка скопирована')
+                });
+            }
+            items.push({ separator: true });
+        }
+
+        // Video context items
+        if (videoEl) {
+            items.push({
+                label: 'Картинка в картинке (PiP)',
+                action: () => window._ferroToggleVideoPiP(videoEl)
+            });
+            items.push({
+                label: 'Сохранить кадр из видео (PNG)',
+                action: () => captureVideoFramePng(videoEl)
+            });
+            const curRate = videoEl.playbackRate || 1;
+            const rates = [1, 1.25, 1.5, 2, 0.5];
+            const nextRate = rates[(rates.indexOf(curRate) + 1) % rates.length] || 1.25;
+            items.push({
+                label: `Скорость видео: ${curRate}× → ${nextRate}×`,
+                action: () => {
+                    videoEl.playbackRate = nextRate;
+                    showToast(`Скорость видео: ${nextRate}×`);
+                }
             });
             items.push({ separator: true });
         }
 
-        // Image context items
+        // Image context items (with Chrome-exact Google Lens!)
         if (imgSrc) {
             items.push({
                 label: 'Открыть изображение в новой вкладке',
                 action: () => {
-                    if (!postIpc({ action: 'new_tab', url: imgSrc })) {
-                        window.open(imgSrc, '_blank');
-                    }
+                    if (!postIpc({ action: 'new_tab', url: imgSrc })) window.open(imgSrc, '_blank');
                 }
             });
             items.push({
@@ -1358,16 +1886,12 @@ pub const CONTEXT_MENU_JS: &str = r#"
             });
             items.push({
                 label: 'Копировать адрес изображения',
-                action: () => copyToClipboard(imgSrc)
+                action: () => copyToClipboard(imgSrc, 'Адрес изображения скопирован')
             });
             items.push({
-                label: 'Найти изображение в Google',
-                action: () => {
-                    const lensUrl = 'https://lens.google.com/uploadbyurl?url=' + encodeURIComponent(imgSrc);
-                    if (!postIpc({ action: 'new_tab', url: lensUrl })) {
-                        window.open(lensUrl, '_blank');
-                    }
-                }
+                iconHtml: LENS_SVG,
+                label: 'Найти картинку через Google Объектив',
+                action: () => searchImageWithLens(imgEl, imgSrc)
             });
             items.push({ separator: true });
         }
@@ -1379,9 +1903,7 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 kbd: 'Ctrl+X',
                 action: () => {
                     target.focus();
-                    if (!postIpc({ action: 'edit_cmd', url: 'cut' })) {
-                        document.execCommand('cut');
-                    }
+                    if (!postIpc({ action: 'edit_cmd', url: 'cut' })) document.execCommand('cut');
                 }
             });
             items.push({
@@ -1389,9 +1911,7 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 kbd: 'Ctrl+C',
                 action: () => {
                     target.focus();
-                    if (!postIpc({ action: 'edit_cmd', url: 'copy' })) {
-                        document.execCommand('copy');
-                    }
+                    if (!postIpc({ action: 'edit_cmd', url: 'copy' })) document.execCommand('copy');
                 }
             });
             items.push({
@@ -1399,14 +1919,13 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 kbd: 'Ctrl+V',
                 action: () => {
                     target.focus();
-                    if (!postIpc({ action: 'edit_cmd', url: 'paste' })) {
-                        document.execCommand('paste');
-                    }
+                    if (!postIpc({ action: 'edit_cmd', url: 'paste' })) document.execCommand('paste');
                 }
             });
             items.push({ separator: true });
         } else if (sel) {
-            const snippet = sel.length > 24 ? sel.slice(0, 24) + '…' : sel;
+            const snippet = sel.length > 22 ? sel.slice(0, 22) + '…' : sel;
+            const [engName, engPrefix] = getSearchEngineInfo();
             items.push({
                 label: 'Копировать',
                 kbd: 'Ctrl+C',
@@ -1416,18 +1935,40 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 }
             });
             items.push({
-                label: `Искать «${snippet}» в Google`,
+                label: `Искать «${snippet}» в ${engName}`,
                 action: () => {
-                    const searchUrl = 'https://www.google.com/search?q=' + encodeURIComponent(sel);
-                    if (!postIpc({ action: 'new_tab', url: searchUrl })) {
-                        window.open(searchUrl, '_blank');
-                    }
+                    const searchUrl = engPrefix + encodeURIComponent(sel);
+                    if (!postIpc({ action: 'new_tab', url: searchUrl })) window.open(searchUrl, '_blank');
                 }
+            });
+            items.push({
+                label: 'Перевести выделенный фрагмент',
+                action: () => translateSelectionInline(sel, e.clientX, e.clientY)
+            });
+            if (!isInternal) {
+                items.push({
+                    label: 'Копировать ссылку на выделенный текст',
+                    action: () => {
+                        const base = window.location.href.split('#')[0];
+                        const fragUrl = `${base}#:~:text=${encodeURIComponent(sel.slice(0, 140))}`;
+                        copyToClipboard(fragUrl, 'Ссылка на фрагмент скопирована');
+                    }
+                });
+            }
+            items.push({ separator: true });
+        }
+
+        // Chrome-exact "Search with Google Lens" anywhere on the page!
+        if (!isInternal) {
+            items.push({
+                iconHtml: LENS_SVG,
+                label: 'Найти с помощью Google Объектива',
+                action: () => window._ferroStartLensOverlay()
             });
             items.push({ separator: true });
         }
 
-        // Standard Firefox-style page items
+        // Standard browser page tools
         items.push({
             label: 'Найти на странице...',
             kbd: 'Ctrl+F',
@@ -1435,23 +1976,32 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 if (window._ferroOpenFindBar) window._ferroOpenFindBar();
             }
         });
+        if (!isInternal) {
+            items.push({
+                label: 'Режим чтения',
+                kbd: 'Alt+R',
+                action: () => {
+                    if (window._ferroToggleReaderMode) window._ferroToggleReaderMode();
+                }
+            });
+            items.push({
+                label: 'Создать QR-код этой страницы...',
+                action: () => {
+                    if (window._ferroShowQrModal) window._ferroShowQrModal();
+                }
+            });
+        }
         items.push({
             label: 'Печать / Сохранить в PDF...',
             kbd: 'Ctrl+P',
-            action: () => {
-                postIpc({ action: 'print_page' });
-            }
+            action: () => postIpc({ action: 'print_page' })
         });
         items.push({
             label: 'Сохранить страницу как...',
             kbd: 'Ctrl+S',
             action: () => {
                 const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
-                postIpc({
-                    action: 'save_page_html',
-                    url: window.location.href,
-                    title: html
-                });
+                postIpc({ action: 'save_page_html', url: window.location.href, title: html });
             }
         });
         items.push({
@@ -1469,16 +2019,11 @@ pub const CONTEXT_MENU_JS: &str = r#"
         items.push({ separator: true });
         items.push({
             label: 'Сделать снимок экрана',
-            action: () => {
-                postIpc({ action: 'take_screenshot' });
-            }
+            action: () => postIpc({ action: 'take_screenshot' })
         });
-        items.push({ separator: true });
         items.push({
             label: 'Перевести страницу на русский',
-            action: () => {
-                postIpc({ action: 'translate' });
-            }
+            action: () => postIpc({ action: 'translate' })
         });
         items.push({ separator: true });
         items.push({
@@ -1486,19 +2031,13 @@ pub const CONTEXT_MENU_JS: &str = r#"
             kbd: 'Ctrl+U',
             action: () => {
                 const src = document.documentElement ? document.documentElement.outerHTML : '';
-                postIpc({
-                    action: 'open_source_html',
-                    url: window.location.href,
-                    title: src
-                });
+                postIpc({ action: 'open_source_html', url: window.location.href, title: src });
             }
         });
         items.push({
-            label: 'Исследовать',
+            label: 'Исследовать элемент',
             kbd: 'F12',
-            action: () => {
-                postIpc({ action: 'inspect_element' });
-            }
+            action: () => postIpc({ action: 'inspect_element' })
         });
 
         // Build Shadow DOM Context Menu
@@ -1523,8 +2062,8 @@ pub const CONTEXT_MENU_JS: &str = r#"
             .ctx-menu {
                 position: fixed;
                 pointer-events: auto;
-                min-width: 268px;
-                max-width: 330px;
+                min-width: 280px;
+                max-width: 350px;
                 background: ${bg};
                 color: ${fg};
                 border: 1px solid ${borderCol};
@@ -1543,7 +2082,7 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 gap: 4px;
             }
             .ctx-nav-btn {
-                height: 34px;
+                height: 32px;
                 border: none;
                 background: transparent;
                 color: ${fg};
@@ -1552,15 +2091,9 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
-                transition: background 0.1s ease, color 0.1s ease;
+                transition: background 0.1s ease;
             }
-            .ctx-nav-btn:hover:not(:disabled) {
-                background: ${hoverBg};
-            }
-            .ctx-nav-btn:disabled {
-                opacity: 0.36;
-                cursor: default;
-            }
+            .ctx-nav-btn:hover { background: ${hoverBg}; }
             .ctx-sep {
                 height: 1px;
                 background: ${borderCol};
@@ -1572,15 +2105,19 @@ pub const CONTEXT_MENU_JS: &str = r#"
                 justify-content: space-between;
                 gap: 14px;
                 margin: 0 4px;
-                padding: 6px 12px;
+                padding: 5.5px 12px;
                 border-radius: ${itemRad}px;
                 cursor: pointer;
                 color: ${fg};
                 line-height: 1.35;
                 transition: background 0.08s ease;
             }
-            .ctx-item:hover {
-                background: ${hoverBg};
+            .ctx-item:hover { background: ${hoverBg}; }
+            .ctx-left {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
             }
             .ctx-label {
                 overflow: hidden;
@@ -1599,7 +2136,6 @@ pub const CONTEXT_MENU_JS: &str = r#"
         const menu = document.createElement('div');
         menu.className = 'ctx-menu';
 
-        // Top 4-button navigation row (Back, Forward, Reload, Bookmark)
         const navBar = document.createElement('div');
         navBar.className = 'ctx-nav-bar';
 
@@ -1607,30 +2143,22 @@ pub const CONTEXT_MENU_JS: &str = r#"
             {
                 title: 'Назад (Alt+←)',
                 svg: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>`,
-                action: () => {
-                    if (!postIpc({ action: 'go_back' })) window.history.back();
-                }
+                action: () => { if (!postIpc({ action: 'go_back' })) window.history.back(); }
             },
             {
                 title: 'Вперёд (Alt+→)',
                 svg: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>`,
-                action: () => {
-                    if (!postIpc({ action: 'go_forward' })) window.history.forward();
-                }
+                action: () => { if (!postIpc({ action: 'go_forward' })) window.history.forward(); }
             },
             {
                 title: 'Обновить (Ctrl+R)',
                 svg: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>`,
-                action: () => {
-                    if (!postIpc({ action: 'reload' })) window.location.reload();
-                }
+                action: () => { if (!postIpc({ action: 'reload' })) window.location.reload(); }
             },
             {
                 title: 'Добавить в закладки (Ctrl+D)',
                 svg: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`,
-                action: () => {
-                    postIpc({ action: 'toggle_bookmark_active' });
-                }
+                action: () => postIpc({ action: 'toggle_bookmark_active' })
             }
         ];
 
@@ -1660,7 +2188,7 @@ pub const CONTEXT_MENU_JS: &str = r#"
             } else {
                 const row = document.createElement('div');
                 row.className = 'ctx-item';
-                row.innerHTML = `<span class="ctx-label">${it.label}</span>${it.kbd ? `<span class="ctx-kbd">${it.kbd}</span>` : ''}`;
+                row.innerHTML = `<span class="ctx-left">${it.iconHtml || ''}<span class="ctx-label">${it.label}</span></span>${it.kbd ? `<span class="ctx-kbd">${it.kbd}</span>` : ''}`;
                 row.addEventListener('click', (ev) => {
                     ev.stopPropagation();
                     removeMenu();
@@ -1673,25 +2201,18 @@ pub const CONTEXT_MENU_JS: &str = r#"
         shadow.appendChild(menu);
         (document.documentElement || document.body).appendChild(host);
 
-        // Clamp within viewport
         const rect = menu.getBoundingClientRect();
         let x = e.clientX;
         let y = e.clientY;
-        if (x + rect.width > window.innerWidth - 6) {
-            x = Math.max(6, window.innerWidth - rect.width - 6);
-        }
-        if (y + rect.height > window.innerHeight - 6) {
-            y = Math.max(6, window.innerHeight - rect.height - 6);
-        }
+        if (x + rect.width > window.innerWidth - 6) x = Math.max(6, window.innerWidth - rect.width - 6);
+        if (y + rect.height > window.innerHeight - 6) y = Math.max(6, window.innerHeight - rect.height - 6);
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
     }, true);
 
     document.addEventListener('mousedown', function(e) {
         const host = document.getElementById(HOST_ID);
-        if (host && e.target !== host && !host.contains(e.target)) {
-            removeMenu();
-        }
+        if (host && e.target !== host && !host.contains(e.target)) removeMenu();
     }, true);
     window.addEventListener('scroll', removeMenu, true);
     window.addEventListener('resize', removeMenu, true);
@@ -1699,9 +2220,9 @@ pub const CONTEXT_MENU_JS: &str = r#"
         if (e.key === 'Escape') removeMenu();
     }, true);
 })();
-"#;
+"##;
 
-pub const HOTKEYS_JS: &str = r#"
+pub const HOTKEYS_JS: &str = r##"
 (function() {
     if (window._ferro_hotkeys_installed) return;
     window._ferro_hotkeys_installed = true;
@@ -1816,7 +2337,307 @@ pub const HOTKEYS_JS: &str = r#"
         inp.select();
     };
 
+    // Distraction-free Reader Mode (Firefox / Safari style)
+    const READER_HOST_ID = 'ferro-reader-host';
+    window._ferroToggleReaderMode = function() {
+        const existing = document.getElementById(READER_HOST_ID);
+        if (existing) {
+            existing.remove();
+            document.documentElement.style.overflow = '';
+            return;
+        }
+        if (window.location.href.startsWith('ferro://')) return;
+
+        // Score candidate article containers
+        const candidates = Array.from(document.querySelectorAll('article, main, [role="main"], .post-content, .article-body, .entry-content, section, div'));
+        let best = null;
+        let bestScore = 0;
+        for (let i = 0; i < candidates.length; i++) {
+            const el = candidates[i];
+            const pList = el.querySelectorAll('p');
+            if (pList.length < 2 && el.tagName !== 'ARTICLE' && el.tagName !== 'MAIN') continue;
+            const txtLen = (el.innerText || '').trim().length;
+            if (txtLen < 220) continue;
+            const linkLen = Array.from(el.querySelectorAll('a')).reduce((s, a) => s + (a.innerText || '').length, 0);
+            const linkDensity = linkLen / Math.max(1, txtLen);
+            if (linkDensity > 0.55) continue;
+            let score = txtLen * (1 - linkDensity) + pList.length * 120;
+            if (el.tagName === 'ARTICLE') score *= 1.45;
+            if (el.tagName === 'MAIN') score *= 1.25;
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        }
+        const sourceRoot = best || document.body;
+        if (!sourceRoot) return;
+
+        const blocks = [];
+        const nodes = sourceRoot.querySelectorAll('h1, h2, h3, h4, p, blockquote, pre, ul, ol, img');
+        const seen = new Set();
+        nodes.forEach(n => {
+            if (seen.has(n)) return;
+            if (n.closest('nav, header, footer, aside, form, [role="navigation"]')) return;
+            const tag = n.tagName.toLowerCase();
+            if (tag === 'img') {
+                const src = n.currentSrc || n.src;
+                if (src && (n.naturalWidth >= 180 || n.width >= 180)) {
+                    blocks.push(`<figure><img src="${src.replace(/"/g, '&quot;')}" alt="" /></figure>`);
+                }
+                return;
+            }
+            const txt = (n.innerText || '').trim();
+            if (txt.length < 18 && !tag.startsWith('h')) return;
+            n.querySelectorAll('*').forEach(ch => seen.add(ch));
+            const safe = txt.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            if (tag === 'pre') blocks.push(`<pre>${safe}</pre>`);
+            else if (tag === 'blockquote') blocks.push(`<blockquote>${safe}</blockquote>`);
+            else if (tag === 'ul' || tag === 'ol') {
+                const lis = Array.from(n.querySelectorAll(':scope > li')).map(li => `<li>${(li.innerText || '').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;')}</li>`).join('');
+                if (lis) blocks.push(`<${tag}>${lis}</${tag}>`);
+            } else if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4') {
+                blocks.push(`<${tag}>${safe}</${tag}>`);
+            } else {
+                blocks.push(`<p>${safe}</p>`);
+            }
+        });
+
+        if (blocks.length === 0) {
+            const rawText = (document.body ? document.body.innerText : '').trim();
+            rawText.split(/\n{2,}/).forEach(par => {
+                const t = par.trim();
+                if (t.length > 30) blocks.push(`<p>${t.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`);
+            });
+        }
+
+        const wordCount = blocks.join(' ').replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length;
+        const readMins = Math.max(1, Math.round(wordCount / 200));
+        const pageTitle = (document.querySelector('h1') ? document.querySelector('h1').innerText.trim() : '') || document.title || window.location.hostname;
+
+        const host = document.createElement('div');
+        host.id = READER_HOST_ID;
+        host.style.cssText = 'position:fixed;inset:0;z-index:2147483646;';
+        const shadow = host.attachShadow({ mode: 'open' });
+
+        shadow.innerHTML = `
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                .wrap {
+                    position: fixed;
+                    inset: 0;
+                    overflow-y: auto;
+                    background: var(--r-bg, #131316);
+                    color: var(--r-fg, #e8e8ed);
+                    font-family: var(--r-font, 'Inter', -apple-system, sans-serif);
+                    transition: background 0.18s, color 0.18s;
+                }
+                .wrap[data-paper="sepia"] { --r-bg: #f4ecd8; --r-fg: #3c3222; --r-muted: #7a6a53; --r-bar: #ebe0c7; --r-border: #d5c7a9; }
+                .wrap[data-paper="light"] { --r-bg: #ffffff; --r-fg: #18181b; --r-muted: #6b7280; --r-bar: #f4f4f6; --r-border: #e4e4e7; }
+                .wrap[data-paper="dark"]  { --r-bg: #131316; --r-fg: #e8e8ed; --r-muted: #90909c; --r-bar: #1b1b20; --r-border: #2d2d36; }
+                .toolbar {
+                    position: sticky;
+                    top: 0;
+                    z-index: 5;
+                    background: var(--r-bar);
+                    border-bottom: 1px solid var(--r-border);
+                    padding: 8px 20px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                    font-family: 'Inter', -apple-system, sans-serif;
+                }
+                .controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+                button {
+                    height: 28px;
+                    padding: 0 10px;
+                    border-radius: 5px;
+                    border: 1px solid var(--r-border);
+                    background: transparent;
+                    color: var(--r-fg);
+                    font-size: 12px;
+                    cursor: pointer;
+                }
+                button:hover { opacity: 0.82; }
+                .meta { font-size: 12px; color: var(--r-muted); }
+                article {
+                    max-width: 700px;
+                    margin: 0 auto;
+                    padding: 42px 24px 96px;
+                    font-size: var(--r-size, 18px);
+                    line-height: 1.72;
+                }
+                h1.doc-title { font-size: 1.75em; line-height: 1.25; margin-bottom: 10px; font-weight: 700; }
+                .subline { font-size: 13px; color: var(--r-muted); margin-bottom: 30px; padding-bottom: 18px; border-bottom: 1px solid var(--r-border); }
+                article p, article ul, article ol, article blockquote, article pre, article figure { margin-bottom: 1.25em; }
+                article h2, article h3, article h4 { margin: 1.5em 0 0.6em; line-height: 1.3; }
+                article ul, article ol { padding-left: 1.5em; }
+                article blockquote { border-left: 3px solid var(--r-muted); padding-left: 16px; color: var(--r-muted); font-style: italic; }
+                article pre { padding: 14px; border-radius: 6px; background: rgba(127,127,127,0.12); overflow-x: auto; font-size: 0.85em; font-family: ui-monospace, monospace; }
+                article img { max-width: 100%; border-radius: 8px; display: block; margin: 0 auto; }
+            </style>
+            <div class="wrap" id="rWrap" data-paper="dark">
+                <div class="toolbar">
+                    <span class="meta">${window.location.hostname} • ~${readMins} мин чтения</span>
+                    <div class="controls">
+                        <button id="fMinus" title="Уменьшить шрифт">A−</button>
+                        <button id="fPlus" title="Увеличить шрифт">A+</button>
+                        <button id="fSans">Sans</button>
+                        <button id="fSerif">Serif</button>
+                        <button data-p="dark">Тёмная</button>
+                        <button data-p="sepia">Сепия</button>
+                        <button data-p="light">Светлая</button>
+                        <button id="rClose">✕ Выйти</button>
+                    </div>
+                </div>
+                <article id="rArt">
+                    <h1 class="doc-title">${pageTitle.replace(/</g, '&lt;')}</h1>
+                    <div class="subline">${window.location.href.replace(/</g, '&lt;')}</div>
+                    ${blocks.join('\n')}
+                </article>
+            </div>
+        `;
+
+        const wrap = shadow.getElementById('rWrap');
+        let fontSize = 18;
+        shadow.getElementById('fMinus').addEventListener('click', () => {
+            fontSize = Math.max(14, fontSize - 2);
+            wrap.style.setProperty('--r-size', fontSize + 'px');
+        });
+        shadow.getElementById('fPlus').addEventListener('click', () => {
+            fontSize = Math.min(28, fontSize + 2);
+            wrap.style.setProperty('--r-size', fontSize + 'px');
+        });
+        shadow.getElementById('fSans').addEventListener('click', () => {
+            wrap.style.setProperty('--r-font', "'Inter', -apple-system, sans-serif");
+        });
+        shadow.getElementById('fSerif').addEventListener('click', () => {
+            wrap.style.setProperty('--r-font', "Georgia, 'Times New Roman', serif");
+        });
+        shadow.querySelectorAll('[data-p]').forEach(btn => {
+            btn.addEventListener('click', () => wrap.setAttribute('data-paper', btn.dataset.p));
+        });
+        const exitReader = () => {
+            host.remove();
+            document.documentElement.style.overflow = '';
+        };
+        shadow.getElementById('rClose').addEventListener('click', exitReader);
+
+        document.documentElement.style.overflow = 'hidden';
+        (document.documentElement || document.body).appendChild(host);
+    };
+
+    // Share Page via QR Code Modal
+    const QR_HOST_ID = 'ferro-qr-modal-host';
+    window._ferroShowQrModal = function() {
+        const existing = document.getElementById(QR_HOST_ID);
+        if (existing) { existing.remove(); return; }
+        const pageUrl = window.location.href;
+        if (!pageUrl || pageUrl.startsWith('ferro://')) return;
+
+        const host = document.createElement('div');
+        host.id = QR_HOST_ID;
+        host.style.cssText = 'position:fixed;top:14px;right:18px;z-index:2147483647;';
+        const shadow = host.attachShadow({ mode: 'open' });
+        const qrImgUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=210x210&margin=10&data=' + encodeURIComponent(pageUrl);
+
+        shadow.innerHTML = `
+            <style>
+                * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+                .card {
+                    width: 276px;
+                    background: #19191e;
+                    color: #f2f2f6;
+                    border: 1px solid #343440;
+                    border-radius: 10px;
+                    padding: 16px;
+                    box-shadow: 0 14px 36px rgba(0,0,0,0.65);
+                    text-align: center;
+                }
+                .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
+                .qr-wrap {
+                    width: 210px;
+                    height: 210px;
+                    margin: 0 auto 12px;
+                    background: #ffffff;
+                    border-radius: 8px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    overflow: hidden;
+                }
+                .qr-wrap img { width: 210px; height: 210px; display: block; }
+                input {
+                    width: 100%;
+                    height: 30px;
+                    background: #111115;
+                    color: #d4d4dc;
+                    border: 1px solid #2e2e38;
+                    border-radius: 5px;
+                    padding: 0 8px;
+                    font-size: 11.5px;
+                    margin-bottom: 10px;
+                    outline: none;
+                }
+                .btns { display: flex; gap: 6px; }
+                button {
+                    flex: 1;
+                    height: 30px;
+                    border-radius: 5px;
+                    border: 1px solid #353542;
+                    background: #24242c;
+                    color: #f2f2f6;
+                    font-size: 12px;
+                    cursor: pointer;
+                }
+                button:hover { background: #2f2f3a; }
+            </style>
+            <div class="card">
+                <div class="head">
+                    <span>QR-код страницы</span>
+                    <button id="clsQr" style="flex:0;padding:0 7px;height:24px;border:none;background:transparent;">✕</button>
+                </div>
+                <div class="qr-wrap">
+                    <img id="qrImg" src="${qrImgUrl}" alt="QR" />
+                </div>
+                <input type="text" readonly id="qrUrlInp" />
+                <div class="btns">
+                    <button id="copyQrUrl">Копировать URL</button>
+                    <button id="dlQrBtn">Скачать PNG</button>
+                </div>
+            </div>
+        `;
+
+        shadow.getElementById('qrUrlInp').value = pageUrl;
+        shadow.getElementById('clsQr').addEventListener('click', () => host.remove());
+        shadow.getElementById('copyQrUrl').addEventListener('click', () => {
+            navigator.clipboard.writeText(pageUrl).catch(() => {});
+            shadow.getElementById('copyQrUrl').textContent = 'Скопировано';
+        });
+        shadow.getElementById('dlQrBtn').addEventListener('click', () => {
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'download_url', url: qrImgUrl }));
+            }
+        });
+
+        const outClick = (ev) => {
+            if (host && ev.target !== host && !host.contains(ev.target)) {
+                document.removeEventListener('mousedown', outClick, true);
+                host.remove();
+            }
+        };
+        setTimeout(() => document.addEventListener('mousedown', outClick, true), 50);
+        (document.body || document.documentElement).appendChild(host);
+    };
+
     window.addEventListener('keydown', function(e) {
+        // Alt+R (or Cyrillic К): Toggle Reader Mode
+        if (e.altKey && !e.ctrlKey && !e.shiftKey && (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К' || e.code === 'KeyR')) {
+            e.preventDefault();
+            e.stopPropagation();
+            window._ferroToggleReaderMode();
+            return;
+        }
         // Ctrl+F (or Cyrillic А): Find in Page
         if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А' || e.code === 'KeyF')) {
             e.preventDefault();
@@ -2039,4 +2860,4 @@ pub const HOTKEYS_JS: &str = r#"
         }
     }, true);
 })();
-"#;
+"##;

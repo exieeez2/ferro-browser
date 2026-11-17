@@ -4,6 +4,8 @@ mod downloads;
 mod history;
 mod importer;
 mod injector;
+mod lens;
+mod notes;
 mod passwords;
 mod settings;
 mod webkit_filter;
@@ -30,6 +32,8 @@ use bookmarks::BookmarksData;
 use downloads::DownloadsData;
 use history::HistoryData;
 use importer::BrowserImporter;
+use lens::{base64_encode, render_lens_upload_html, render_side_header_html};
+use notes::{render_bookmarks_panel_html, render_sleeping_tab_html, NotesData};
 use passwords::PasswordsData;
 use session::{SessionData, SessionTab};
 use settings::BrowserSettings;
@@ -52,6 +56,7 @@ struct Tab {
     is_loading: bool,
     is_pinned: bool,
     is_muted: bool,
+    sleeping_url: Option<String>,
     zoom_pct: u32,
     webview: Rc<WebView>,
     inner: webkit2gtk::WebView,
@@ -61,7 +66,13 @@ struct Tab {
 struct BrowserState {
     window: gtk::Window,
     top_box: gtk::Box,
+    hpaned: gtk::Paned,
     stack: gtk::Stack,
+    side_box: gtk::Box,
+    side_header_webview: Option<Rc<WebView>>,
+    side_webview: Option<Rc<WebView>>,
+    side_panel_open: bool,
+    lens_cache: Arc<Mutex<(String, String)>>,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
     tabs: Vec<Tab>,
@@ -117,15 +128,17 @@ fn sync_tabs_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
                 .tabs
                 .iter()
                 .map(|t| {
+                    let display_url = t.sleeping_url.as_deref().unwrap_or(&t.url);
                     serde_json::json!({
                         "id": t.id,
-                        "url": t.url,
+                        "url": display_url,
                         "title": t.title,
                         "canGoBack": t.can_go_back,
                         "canGoForward": t.can_go_forward,
                         "isLoading": t.is_loading,
                         "isPinned": t.is_pinned,
                         "isMuted": t.is_muted,
+                        "isSleeping": t.sleeping_url.is_some(),
                         "zoomPct": t.zoom_pct,
                     })
                 })
@@ -151,14 +164,16 @@ fn sync_tab_update_to_ui(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
     let (tab_data, top_wv) = {
         if let Ok(state) = state_rc.try_borrow() {
             let data = state.tabs.iter().find(|t| t.id == tab_id).map(|t| {
+                let display_url = t.sleeping_url.as_deref().unwrap_or(&t.url);
                 serde_json::json!({
-                    "url": t.url,
+                    "url": display_url,
                     "title": t.title,
                     "canGoBack": t.can_go_back,
                     "canGoForward": t.can_go_forward,
                     "isLoading": t.is_loading,
                     "isPinned": t.is_pinned,
                     "isMuted": t.is_muted,
+                    "isSleeping": t.sleeping_url.is_some(),
                     "zoomPct": t.zoom_pct,
                 })
             });
@@ -510,11 +525,17 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
                 top.webview().set_background_color(&surface_rgba);
             }
 
-            let tabs: Vec<Rc<WebView>> = state.tabs.iter().map(|t| t.webview.clone()).collect();
+            let mut all_wvs: Vec<Rc<WebView>> = state.tabs.iter().map(|t| t.webview.clone()).collect();
+            if let Some(sh) = &state.side_header_webview {
+                all_wvs.push(sh.clone());
+            }
+            if let Some(sw) = &state.side_webview {
+                all_wvs.push(sw.clone());
+            }
             (
                 serde_json::to_string(&state.settings).unwrap_or_else(|_| "{}".to_string()),
                 state.top_webview.clone(),
-                tabs,
+                all_wvs,
             )
         } else {
             ("{}".to_string(), None, Vec::new())
@@ -538,20 +559,141 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
     sync_adblock_to_ui(state_rc);
 }
 
-fn switch_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
-    let tab_name = {
-        if let Ok(mut state) = state_rc.try_borrow_mut() {
-            if state.tabs.iter().any(|t| t.id == tab_id) {
-                state.active_tab_id = Some(tab_id);
-                Some((format!("tab_{}", tab_id), state.stack.clone()))
-            } else {
-                None
+fn ensure_and_open_side_panel(state_rc: &Rc<RefCell<BrowserState>>, mode: &str, target_url: &str) {
+    let needs_init = state_rc.try_borrow().map(|s| s.side_webview.is_none()).unwrap_or(false);
+    if needs_init {
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            let hdr_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            hdr_box.set_size_request(-1, 36);
+            st.side_box.pack_start(&hdr_box, false, false, 0);
+
+            let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            st.side_box.pack_start(&content_box, true, true, 0);
+
+            let surface_rgba = compute_surface_rgba(&st.settings);
+            let s_json = serde_json::to_string(&st.settings).unwrap_or_else(|_| "{}".to_string());
+            let hdr_init = format!(
+                "window.addEventListener('DOMContentLoaded', function() {{ if (window.applySettings) window.applySettings({}); }});",
+                s_json
+            );
+
+            let state_for_hdr = state_rc.clone();
+            if let Ok(hdr_wv) = WebViewBuilder::new()
+                .with_transparent(true)
+                .with_initialization_script(&hdr_init)
+                .with_html(render_side_header_html())
+                .with_ipc_handler(move |req| {
+                    if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
+                        handle_ipc(&state_for_hdr, msg);
+                    }
+                })
+                .build_gtk(&hdr_box)
+            {
+                hdr_wv.webview().set_background_color(&surface_rgba);
+                hdr_wv.webview().connect_context_menu(|_, _, _, _| true);
+                st.side_header_webview = Some(Rc::new(hdr_wv));
             }
+
+            let state_for_body = state_rc.clone();
+            if let Ok(body_wv) = WebViewBuilder::new_with_web_context(&mut st.web_context)
+                .with_transparent(true)
+                .with_ipc_handler(move |req| {
+                    if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
+                        handle_ipc(&state_for_body, msg);
+                    }
+                })
+                .build_gtk(&content_box)
+            {
+                let inner = body_wv.webview();
+                inner.set_background_color(&surface_rgba);
+                if let Some(wk_s) = WebViewExt::settings(&inner) {
+                    wk_s.set_user_agent(Some(
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    ));
+                    wk_s.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
+                    wk_s.set_enable_javascript(true);
+                }
+                let state_weak = Rc::downgrade(state_rc);
+                inner.connect_decide_policy(move |_wv, decision, decision_type| {
+                    if decision_type == PolicyDecisionType::NewWindowAction {
+                        if let Ok(nav) = decision.clone().downcast::<NavigationPolicyDecision>() {
+                            #[allow(deprecated)]
+                            if let Some(req) = nav.request() {
+                                if let Some(uri) = req.uri() {
+                                    if let Some(s_rc) = state_weak.upgrade() {
+                                        create_tab(&s_rc, uri.as_str());
+                                    }
+                                    decision.ignore();
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    false
+                });
+                st.side_webview = Some(Rc::new(body_wv));
+            }
+        }
+    }
+
+    let (hdr_wv, body_wv) = {
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            if !st.side_panel_open {
+                let (win_w, _) = st.window.size();
+                st.hpaned.set_position((win_w - 420).max(340));
+                st.side_box.set_size_request(340, -1);
+                st.side_box.show_all();
+                st.side_panel_open = true;
+            }
+            (st.side_header_webview.clone(), st.side_webview.clone())
         } else {
-            None
+            (None, None)
         }
     };
 
+    if let Some(hdr) = hdr_wv {
+        let _ = hdr.evaluate_script(&format!(
+            "if (window.setSideMode) window.setSideMode({:?});",
+            mode
+        ));
+    }
+    if let Some(wv) = body_wv {
+        if !target_url.is_empty() {
+            if target_url.starts_with("ferro://") {
+                let _ = wv.load_url(target_url);
+            } else {
+                wv.webview().load_uri(target_url);
+            }
+        }
+    }
+}
+
+fn switch_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
+    let (tab_name, wake_info) = {
+        if let Ok(mut state) = state_rc.try_borrow_mut() {
+            let mut found = false;
+            let mut wake = None;
+            if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == tab_id) {
+                found = true;
+                wake = tab.sleeping_url.take().map(|u| {
+                    tab.url = u.clone();
+                    (tab.inner.clone(), u)
+                });
+            }
+            if found {
+                state.active_tab_id = Some(tab_id);
+                (Some((format!("tab_{}", tab_id), state.stack.clone())), wake)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        }
+    };
+
+    if let Some((inner, wake_url)) = wake_info {
+        inner.load_uri(&wake_url);
+    }
     if let Some((name, stack)) = tab_name {
         stack.set_visible_child_name(&name);
     }
@@ -621,6 +763,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
         passwords_dirty,
         downloads_store,
         source_cache,
+        lens_cache,
     ) = {
         if let Ok(mut state) = state_rc.try_borrow_mut() {
             let id = state.next_tab_id;
@@ -644,6 +787,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 state.passwords_dirty.clone(),
                 state.downloads.clone(),
                 state.page_source_cache.clone(),
+                state.lens_cache.clone(),
             )
         } else {
             return 0;
@@ -724,6 +868,40 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 (TOKENS_HTML.to_string(), "text/html; charset=utf-8")
             } else if path_and_query.starts_with("settings") {
                 (SETTINGS_HTML.to_string(), "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("lens-upload") {
+                let (b64, fb) = lens_cache
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                (render_lens_upload_html(&b64, &fb), "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("notes") {
+                let n = NotesData::load_or_default();
+                (n.render_html(), "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("api/notes/save") {
+                if let Ok(json_str) = std::str::from_utf8(req.body()) {
+                    if let Ok(notes_data) = serde_json::from_str::<NotesData>(json_str) {
+                        notes_data.save();
+                    }
+                }
+                (r#"{"status":"saved"}"#.to_string(), "application/json")
+            } else if path_and_query.starts_with("bookmarks-panel") {
+                let b = BookmarksData::load_or_default();
+                (render_bookmarks_panel_html(&b), "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("sleep") {
+                let query = path_and_query.split('?').nth(1).unwrap_or("");
+                let mut u = String::new();
+                let mut t = String::from("Вкладка в спящем режиме");
+                for pair in query.split('&') {
+                    if let Some((k, v)) = pair.split_once('=') {
+                        let dec = percent_encoding::percent_decode_str(v).decode_utf8_lossy().to_string();
+                        match k {
+                            "url" => u = dec,
+                            "title" => t = dec,
+                            _ => {}
+                        }
+                    }
+                }
+                (render_sleeping_tab_html(&u, &t), "text/html; charset=utf-8")
             } else if path_and_query.starts_with("view-source") {
                 let s = BrowserSettings::load_or_default();
                 let (src_url, src_html) = source_cache
@@ -1087,6 +1265,9 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                         wk_s.set_enable_javascript(allow_js);
                     }
                     if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == tab_id_copy) {
+                        if !new_uri.starts_with("ferro://sleep") && !new_uri.is_empty() {
+                            tab.sleeping_url = None;
+                        }
                         tab.url = new_uri;
                     }
                 }
@@ -1175,6 +1356,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 is_loading: false,
                 is_pinned: false,
                 is_muted: false,
+                sleeping_url: None,
                 zoom_pct: settings_snapshot.default_zoom.clamp(50, 200),
                 webview,
                 inner: inner_wv,
@@ -1761,6 +1943,218 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 }
             }
         }
+        "open_lens_overlay" => {
+            let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+            });
+            if let Some(wv) = wry_wv {
+                let _ = wv.evaluate_script("if (window._ferroStartLensOverlay) window._ferroStartLensOverlay();");
+            }
+        }
+        "lens_capture_rect" => {
+            if let Some(json_str) = msg.url {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let rx = val.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let ry = val.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let rw = val.get("w").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                    let rh = val.get("h").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                    let vw = val.get("vw").and_then(|v| v.as_f64()).unwrap_or(1000.0).max(1.0);
+                    let vh = val.get("vh").and_then(|v| v.as_f64()).unwrap_or(700.0).max(1.0);
+                    let fallback = val
+                        .get("fallback")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let cap_info = state_rc.try_borrow().ok().and_then(|st| {
+                        let alloc = st.stack.allocation();
+                        st.window.window().map(|gw| (gw, alloc, st.lens_cache.clone()))
+                    });
+
+                    if let Some((gdk_win, alloc, lens_cache)) = cap_info {
+                        let sx = (alloc.width() as f64) / vw;
+                        let sy = (alloc.height() as f64) / vh;
+                        let px = (alloc.x() + (rx * sx).round() as i32).max(0);
+                        let py = (alloc.y() + (ry * sy).round() as i32).max(0);
+                        let pw = ((rw * sx).round() as i32).max(12).min((alloc.width() - (px - alloc.x())).max(12));
+                        let ph = ((rh * sy).round() as i32).max(12).min((alloc.height() - (py - alloc.y())).max(12));
+
+                        let mut b64_png = String::new();
+                        if let Some(pixbuf) = gdk_win.pixbuf(px, py, pw, ph) {
+                            if let Ok(png_bytes) = pixbuf.save_to_bufferv("png", &[]) {
+                                b64_png = base64_encode(&png_bytes);
+                            }
+                        }
+
+                        if let Ok(mut guard) = lens_cache.lock() {
+                            *guard = (b64_png, fallback);
+                        }
+                        ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+                    }
+                }
+            }
+        }
+        "lens_image_data" => {
+            let b64_data = msg.title.unwrap_or_default();
+            let fallback = msg.url.unwrap_or_default();
+            if let Ok(st) = state_rc.try_borrow() {
+                if let Ok(mut guard) = st.lens_cache.lock() {
+                    *guard = (b64_data, fallback);
+                }
+            }
+            ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+        }
+        "lens_url" => {
+            if let Some(img_url) = msg.url {
+                if let Ok(st) = state_rc.try_borrow() {
+                    if let Ok(mut guard) = st.lens_cache.lock() {
+                        *guard = (String::new(), img_url);
+                    }
+                }
+                ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+            }
+        }
+        "open_side_panel" => {
+            let mode = msg.url.as_deref().unwrap_or("notes");
+            let route = match mode {
+                "lens" => "ferro://lens-upload",
+                "bookmarks" => "ferro://bookmarks-panel",
+                "history" => "ferro://history",
+                "downloads" => "ferro://downloads",
+                _ => "ferro://notes",
+            };
+            ensure_and_open_side_panel(state_rc, mode, route);
+        }
+        "toggle_side_panel" => {
+            let currently_open = state_rc.try_borrow().map(|s| s.side_panel_open).unwrap_or(false);
+            if currently_open {
+                if let Ok(mut st) = state_rc.try_borrow_mut() {
+                    st.side_box.hide();
+                    st.side_panel_open = false;
+                }
+            } else {
+                ensure_and_open_side_panel(state_rc, "notes", "ferro://notes");
+            }
+        }
+        "close_side_panel" => {
+            if let Ok(mut st) = state_rc.try_borrow_mut() {
+                st.side_box.hide();
+                st.side_panel_open = false;
+            }
+        }
+        "side_popout" => {
+            let cur_uri = state_rc.try_borrow().ok().and_then(|s| {
+                s.side_webview
+                    .as_ref()
+                    .and_then(|wv| wv.webview().uri().map(|u| u.to_string()))
+            });
+            if let Some(uri) = cur_uri {
+                if !uri.is_empty() && uri != "ferro://lens-upload" {
+                    let target = if uri == "ferro://bookmarks-panel" { "ferro://newtab" } else { &uri };
+                    create_tab(state_rc, target);
+                    if let Ok(mut st) = state_rc.try_borrow_mut() {
+                        st.side_box.hide();
+                        st.side_panel_open = false;
+                    }
+                }
+            }
+        }
+        "toggle_reader" => {
+            let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+            });
+            if let Some(wv) = wry_wv {
+                let _ = wv.evaluate_script("if (window._ferroToggleReaderMode) window._ferroToggleReaderMode();");
+            }
+        }
+        "show_qr" => {
+            let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+            });
+            if let Some(wv) = wry_wv {
+                let _ = wv.evaluate_script("if (window._ferroShowQrModal) window._ferroShowQrModal();");
+            }
+        }
+        "toggle_pip" => {
+            let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+            });
+            if let Some(wv) = wry_wv {
+                let _ = wv.evaluate_script("if (window._ferroToggleVideoPiP) window._ferroToggleVideoPiP();");
+            }
+        }
+        "reorder_tabs" => {
+            if let Some(order_str) = msg.url {
+                let ids: Vec<u32> = order_str
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<u32>().ok())
+                    .collect();
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    if ids.len() == state.tabs.len() {
+                        let mut reordered = Vec::with_capacity(state.tabs.len());
+                        for id in ids {
+                            if let Some(pos) = state.tabs.iter().position(|t| t.id == id) {
+                                reordered.push(state.tabs.remove(pos));
+                            }
+                        }
+                        reordered.append(&mut state.tabs);
+                        state.tabs = reordered;
+                    }
+                }
+            }
+        }
+        "sleep_tab" => {
+            if let Some(target_id) = msg.id {
+                let sleep_nav = {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        if state.active_tab_id != Some(target_id) {
+                            if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == target_id) {
+                                if tab.sleeping_url.is_none() && !tab.url.starts_with("ferro://") && !tab.url.is_empty() {
+                                    let real_url = tab.url.clone();
+                                    let enc_u = percent_encoding::utf8_percent_encode(&real_url, percent_encoding::NON_ALPHANUMERIC).to_string();
+                                    let enc_t = percent_encoding::utf8_percent_encode(&tab.title, percent_encoding::NON_ALPHANUMERIC).to_string();
+                                    tab.sleeping_url = Some(real_url);
+                                    Some((tab.webview.clone(), format!("ferro://sleep?url={}&title={}", enc_u, enc_t)))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some((wv, sleep_uri)) = sleep_nav {
+                    let _ = wv.load_url(&sleep_uri);
+                    sync_tab_update_to_ui(state_rc, target_id);
+                }
+            }
+        }
+        "close_tabs_right" => {
+            if let Some(target_id) = msg.id {
+                let right_ids: Vec<u32> = state_rc
+                    .try_borrow()
+                    .ok()
+                    .and_then(|st| {
+                        st.tabs.iter().position(|t| t.id == target_id).map(|pos| {
+                            st.tabs
+                                .iter()
+                                .skip(pos + 1)
+                                .filter(|t| !t.is_pinned)
+                                .map(|t| t.id)
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default();
+                for rid in right_ids {
+                    close_tab(state_rc, rid);
+                }
+            }
+        }
         "clear_history" => {
             if let Ok(mut state) = state_rc.try_borrow_mut() {
                 state.history.clear();
@@ -2062,7 +2456,42 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         });
                         menu.append(&item_mute);
 
+                        let is_active = state_rc
+                            .try_borrow()
+                            .ok()
+                            .map(|st| st.active_tab_id == Some(tab_id))
+                            .unwrap_or(false);
+                        if !is_active {
+                            let item_sleep = gtk::MenuItem::with_label("Усыпить вкладку (освободить ОЗУ)");
+                            let s_rc = state_rc.clone();
+                            item_sleep.connect_activate(move |_| {
+                                handle_ipc(&s_rc, IpcMessage {
+                                    action: "sleep_tab".to_string(),
+                                    url: None,
+                                    id: Some(tab_id),
+                                    title: None,
+                                    pass: None,
+                                    settings: None,
+                                });
+                            });
+                            menu.append(&item_sleep);
+                        }
+
                         menu.append(&gtk::SeparatorMenuItem::new());
+
+                        let item_close_right = gtk::MenuItem::with_label("Закрыть вкладки справа");
+                        let s_rc = state_rc.clone();
+                        item_close_right.connect_activate(move |_| {
+                            handle_ipc(&s_rc, IpcMessage {
+                                action: "close_tabs_right".to_string(),
+                                url: None,
+                                id: Some(tab_id),
+                                title: None,
+                                pass: None,
+                                settings: None,
+                            });
+                        });
+                        menu.append(&item_close_right);
 
                         let item_close_others = gtk::MenuItem::with_label("Закрыть другие вкладки");
                         let s_rc = state_rc.clone();
@@ -2202,7 +2631,42 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     });
                     menu.append(&item_passwords);
 
+                    let item_side = gtk::MenuItem::with_label("Боковая панель и Заметки");
+                    let s_rc = state_rc.clone();
+                    item_side.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "toggle_side_panel".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_side);
+
                     menu.append(&gtk::SeparatorMenuItem::new());
+
+                    let item_lens = gtk::MenuItem::with_label("Поиск с Google Объективом");
+                    let s_rc = state_rc.clone();
+                    item_lens.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "open_lens_overlay".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_lens);
+
+                    let item_reader = gtk::MenuItem::with_label("Режим чтения                     Alt+R");
+                    let s_rc = state_rc.clone();
+                    item_reader.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "toggle_reader".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_reader);
+
+                    let item_pip = gtk::MenuItem::with_label("Картинка в картинке (PiP)");
+                    let s_rc = state_rc.clone();
+                    item_pip.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "toggle_pip".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_pip);
+
+                    let item_qr = gtk::MenuItem::with_label("QR-код страницы");
+                    let s_rc = state_rc.clone();
+                    item_qr.connect_activate(move |_| {
+                        handle_ipc(&s_rc, IpcMessage { action: "show_qr".to_string(), url: None, id: None, title: None, pass: None, settings: None });
+                    });
+                    menu.append(&item_qr);
 
                     let item_find = gtk::MenuItem::with_label("Найти на странице            Ctrl+F");
                     let s_rc = state_rc.clone();
@@ -2412,8 +2876,12 @@ fn main() {
     top_box.set_size_request(-1, initial_top_h);
     vbox.pack_start(&top_box, false, false, 0);
 
+    let hpaned = gtk::Paned::new(gtk::Orientation::Horizontal);
     let stack = gtk::Stack::new();
-    vbox.pack_start(&stack, true, true, 0);
+    let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    hpaned.pack1(&stack, true, false);
+    hpaned.pack2(&side_box, false, false);
+    vbox.pack_start(&hpaned, true, true, 0);
 
     let theme_mode = settings.theme_mode.clone();
 
@@ -2438,6 +2906,7 @@ fn main() {
     let history_dirty = Arc::new(AtomicBool::new(false));
     let passwords_dirty = Arc::new(AtomicBool::new(false));
     let downloads = Arc::new(Mutex::new(DownloadsData::load_or_default()));
+    let lens_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let initial_settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string());
     let initial_surface_rgba = compute_surface_rgba(&settings);
@@ -2445,7 +2914,13 @@ fn main() {
     let state = Rc::new(RefCell::new(BrowserState {
         window: window.clone(),
         top_box: top_box.clone(),
+        hpaned,
         stack,
+        side_box: side_box.clone(),
+        side_header_webview: None,
+        side_webview: None,
+        side_panel_open: false,
+        lens_cache,
         css_provider,
         top_webview: None,
         tabs: Vec::new(),
@@ -2814,6 +3289,16 @@ fn main() {
                     "const inp = document.getElementById('omniboxInput'); if(inp){ inp.focus(); inp.select(); }",
                 );
                 return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::r || key == gdk::keys::constants::R || key == gdk::keys::constants::Cyrillic_ka || key == gdk::keys::constants::Cyrillic_KA {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "toggle_reader".to_string(),
+                    url: None,
+                    id: None,
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
+                return glib::Propagation::Stop;
             }
         } else if key == gdk::keys::constants::F5 {
             let inner = {
@@ -2858,5 +3343,6 @@ fn main() {
     });
 
     window.show_all();
+    side_box.hide();
     gtk::main();
 }
