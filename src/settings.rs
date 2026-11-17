@@ -10,12 +10,32 @@ fn default_search_engine() -> String {
     "google".to_string()
 }
 
+fn default_homepage_url() -> String {
+    "ferro://newtab".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_zoom_level() -> u32 {
+    100
+}
+
+fn default_download_dir() -> String {
+    dirs::download_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .to_string_lossy()
+        .to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BrowserSettings {
     pub theme_mode: String,            // "dark" | "light"
     pub accent_color: String,          // "#ececec", "#3b82f6", "#10b981", "#8b5cf6", etc.
     pub corner_radius: u32,            // 0 to 20
-    pub ui_transparency: u32,          // 0 to 60 (% transparency, e.g. 20 for 80% opacity)
+    pub ui_transparency: u32,          // 0 to 60 (% transparency)
     pub top_panel_theme: String,       // "default", "carbon", "aurora", "sunset", "neon"
     pub wallpaper_type: String,        // "none", "forest", "cyberpunk", "nebula", "obsidian", "custom"
     pub wallpaper_url: String,         // URL or base64 data
@@ -26,6 +46,28 @@ pub struct BrowserSettings {
     pub restore_session_mode: String,  // "prompt" | "always" | "never"
     #[serde(default = "default_search_engine")]
     pub search_engine: String,         // "google" | "duckduckgo" | "yandex" | "bing" | "brave" | "youtube" | "github"
+    #[serde(default = "default_homepage_url")]
+    pub homepage_url: String,
+    #[serde(default = "default_true")]
+    pub show_bookmarks_bar: bool,
+    #[serde(default = "default_true")]
+    pub show_ntp_shortcuts: bool,
+    #[serde(default = "default_zoom_level")]
+    pub default_zoom: u32,             // 50 to 200 (%)
+    #[serde(default = "default_true")]
+    pub smooth_scrolling: bool,
+    #[serde(default = "default_true")]
+    pub adblock_enabled: bool,
+    #[serde(default = "default_true")]
+    pub do_not_track: bool,
+    #[serde(default = "default_true")]
+    pub offer_save_passwords: bool,
+    #[serde(default = "default_true")]
+    pub enable_javascript: bool,
+    #[serde(default = "default_true")]
+    pub enable_webgl: bool,
+    #[serde(default = "default_download_dir")]
+    pub download_dir: String,
 }
 
 impl Default for BrowserSettings {
@@ -43,6 +85,17 @@ impl Default for BrowserSettings {
             has_prompted_import: false,
             restore_session_mode: "prompt".to_string(),
             search_engine: "google".to_string(),
+            homepage_url: default_homepage_url(),
+            show_bookmarks_bar: true,
+            show_ntp_shortcuts: true,
+            default_zoom: 100,
+            smooth_scrolling: true,
+            adblock_enabled: true,
+            do_not_track: true,
+            offer_save_passwords: true,
+            enable_javascript: true,
+            enable_webgl: true,
+            download_dir: default_download_dir(),
         }
     }
 }

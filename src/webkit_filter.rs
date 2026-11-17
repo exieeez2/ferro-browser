@@ -34,8 +34,8 @@ unsafe extern "C" fn filter_save_cb(
 ) {
     let mut err = std::ptr::null_mut();
     let filter = webkit_user_content_filter_store_save_finish(source_object as *mut _, res, &mut err);
+    let cb = Box::from_raw(user_data as *mut Box<dyn FnOnce(WebKitFilter)>);
     if !filter.is_null() {
-        let cb = Box::from_raw(user_data as *mut Box<dyn FnOnce(WebKitFilter)>);
         cb(WebKitFilter { raw: filter });
     } else if !err.is_null() {
         glib::ffi::g_error_free(err);
@@ -57,6 +57,7 @@ pub fn save_filter<F: FnOnce(WebKitFilter) + 'static>(store_dir: &str, filter_id
             Some(filter_save_cb),
             Box::into_raw(boxed) as *mut _,
         );
+        glib::gobject_ffi::g_object_unref(store as *mut _);
     }
 }
 
@@ -91,6 +92,7 @@ pub fn load_filter<F: FnOnce(Option<WebKitFilter>) + 'static>(store_dir: &str, f
             Some(filter_load_cb),
             Box::into_raw(boxed) as *mut _,
         );
+        glib::gobject_ffi::g_object_unref(store as *mut _);
     }
 }
 

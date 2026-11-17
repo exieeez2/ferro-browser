@@ -123,9 +123,6 @@ impl HistoryData {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>История — Ferro</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {{
       --bg-surface: #141414;
@@ -559,14 +556,14 @@ impl HistoryData {
     function deleteItem(id) {{
       rawItems = rawItems.filter(i => i.id !== id);
       render(searchInput.value);
-      window.location.href = 'ferro://api/history/delete?id=' + id;
+      fetch('ferro://api/history/delete?id=' + id).catch(() => {{}});
     }}
 
     clearBtn.addEventListener('click', () => {{
       if (confirm('Вы уверены, что хотите очистить всю историю?')) {{
         rawItems = [];
         render();
-        window.location.href = 'ferro://api/history/clear';
+        fetch('ferro://api/history/clear').catch(() => {{}});
       }}
     }});
 

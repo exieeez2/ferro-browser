@@ -89,6 +89,11 @@ impl PasswordsData {
         self.save();
     }
 
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.save();
+    }
+
     pub fn import_chrome_csv(&mut self, csv_text: &str) -> usize {
         let mut count = 0;
         let mut lines = csv_text.lines();
@@ -120,54 +125,55 @@ impl PasswordsData {
             r#"
             (function() {{
                 try {{
+                    if (window.location.protocol === 'ferro:') return;
                     const passwords = {};
-                    if (!passwords || passwords.length === 0) return;
+                    const curOrigin = (window.location.origin || '').toLowerCase();
+                    const curHost = (window.location.hostname || '').toLowerCase();
 
-                    const curOrigin = window.location.origin.toLowerCase();
-                    const curHost = window.location.hostname.toLowerCase();
-
-                    const match = passwords.find(p => {{
+                    const match = (passwords && passwords.length > 0 && curHost) ? passwords.find(p => {{
                         const pUrl = (p.origin || '').toLowerCase();
-                        return pUrl.includes(curHost) || curOrigin.includes(pUrl);
-                    }});
+                        return pUrl && (pUrl.includes(curHost) || curOrigin.includes(pUrl));
+                    }}) : null;
 
-                    if (!match) return;
+                    if (match) {{
+                        function doAutofill() {{
+                            const passInputs = document.querySelectorAll('input[type="password"]');
+                            if (passInputs.length === 0) return;
 
-                    function doAutofill() {{
-                        const passInputs = document.querySelectorAll('input[type="password"]');
-                        if (passInputs.length === 0) return;
-
-                        passInputs.forEach(passInput => {{
-                            if (!passInput.value) {{
-                                passInput.value = match.password;
-                                passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                            }}
-
-                            // Find preceding username/email input
-                            const form = passInput.form || document;
-                            const textInputs = form.querySelectorAll('input[type="text"], input[type="email"], input:not([type])');
-                            textInputs.forEach(textInput => {{
-                                if (!textInput.value && match.username) {{
-                                    textInput.value = match.username;
-                                    textInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                    textInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            passInputs.forEach(passInput => {{
+                                if (!passInput.value) {{
+                                    passInput.value = match.password;
+                                    passInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                    passInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
                                 }}
+
+                                const form = passInput.form || document;
+                                const textInputs = form.querySelectorAll('input[type="text"], input[type="email"], input:not([type])');
+                                textInputs.forEach(textInput => {{
+                                    if (!textInput.value && match.username) {{
+                                        textInput.value = match.username;
+                                        textInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                        textInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                    }}
+                                }});
                             }});
-                        }});
+                        }}
+
+                        if (document.readyState === 'loading') {{
+                            document.addEventListener('DOMContentLoaded', doAutofill);
+                        }} else {{
+                            doAutofill();
+                        }}
+                        setTimeout(doAutofill, 800);
+                        setTimeout(doAutofill, 2000);
                     }}
 
-                    if (document.readyState === 'loading') {{
-                        document.addEventListener('DOMContentLoaded', doAutofill);
-                    }} else {{
-                        doAutofill();
-                    }}
-                    setTimeout(doAutofill, 800);
-                    setTimeout(doAutofill, 2000);
-
-                    // Firefox-style Save Password Banner
+                    // Firefox-style Save Password Banner (respects offer_save_passwords setting)
                     function showSavePasswordBanner(origin, username, password) {{
+                        const cfg = window._ferro_settings || {{}};
+                        if (cfg.offer_save_passwords === false) return;
                         if (!password || password.length < 1) return;
+                        if (match && match.password === password && match.username === (username || '')) return;
                         if (document.getElementById('ferro-save-pwd-banner')) return;
 
                         const banner = document.createElement('div');
@@ -214,13 +220,19 @@ impl PasswordsData {
                         document.getElementById('ferro-btn-yes').addEventListener('click', () => {{
                             const finalUser = document.getElementById('ferro-input-user').value.trim();
                             const finalPass = document.getElementById('ferro-input-pass').value.trim();
-                            const saveUrl = 'ferro://api/passwords/save?origin=' + encodeURIComponent(window.location.origin)
-                                + '&user=' + encodeURIComponent(finalUser)
-                                + '&pass=' + encodeURIComponent(finalPass);
-                            
-                            const img = new Image();
-                            img.src = saveUrl;
-                            try {{ fetch(saveUrl); }} catch(e){{}}
+                            if (window.ipc) {{
+                                window.ipc.postMessage(JSON.stringify({{
+                                    action: 'save_password',
+                                    url: window.location.origin,
+                                    title: finalUser,
+                                    pass: finalPass
+                                }}));
+                            }} else {{
+                                const saveUrl = 'ferro://api/passwords/save?origin=' + encodeURIComponent(window.location.origin)
+                                    + '&user=' + encodeURIComponent(finalUser)
+                                    + '&pass=' + encodeURIComponent(finalPass);
+                                try {{ fetch(saveUrl); }} catch(e){{}}
+                            }}
                             banner.remove();
                         }});
                     }}
@@ -286,9 +298,6 @@ impl PasswordsData {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Пароли и аккаунт — Ferro</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {{
       --bg-surface: #141414;
@@ -664,7 +673,7 @@ impl PasswordsData {
       if (confirm('Удалить этот пароль?')) {{
         rawItems = rawItems.filter(i => i.id !== id);
         render(searchInput.value);
-        window.location.href = 'ferro://api/passwords/delete?id=' + id;
+        fetch('ferro://api/passwords/delete?id=' + id).catch(() => {{}});
       }}
     }}
 

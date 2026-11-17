@@ -34,6 +34,7 @@ impl BrowserImporter {
             ("chrome", "Google Chrome", home.join(".config/google-chrome/Default")),
             ("chromium", "Chromium", home.join(".config/chromium/Default")),
             ("brave", "Brave Browser", home.join(".config/BraveSoftware/Brave-Browser/Default")),
+            ("vivaldi", "Vivaldi", home.join(".config/vivaldi/Default")),
             ("edge", "Microsoft Edge", home.join(".config/microsoft-edge/Default")),
         ];
 
@@ -78,15 +79,11 @@ impl BrowserImporter {
                     if p.is_dir() && (name.contains("default") || name.contains("release")) {
                         let places = p.join("places.sqlite");
                         let logins = p.join("logins.json");
-                        let bm_count = if places.exists() {
-                            Self::import_firefox_places(&places).0.len()
+                        let (bm_count, hist_count) = if places.exists() {
+                            let (bm, hist) = Self::import_firefox_places(&places);
+                            (bm.len(), hist.len())
                         } else {
-                            0
-                        };
-                        let hist_count = if places.exists() {
-                            Self::import_firefox_places(&places).1.len()
-                        } else {
-                            0
+                            (0, 0)
                         };
                         list.push(DetectedBrowser {
                             id: format!("firefox_{}", name),
@@ -144,9 +141,13 @@ impl BrowserImporter {
             return results;
         }
 
-        // Copy history to temporary file to avoid database lock if Chrome is currently open
+        // Copy history (+ WAL/SHM if open) to temporary file to avoid database lock
         let tmp_copy = PathBuf::from("/tmp/ferro_import_chrome_hist.sqlite");
         let _ = fs::copy(history_file, &tmp_copy);
+        let wal = history_file.with_file_name("History-wal");
+        if wal.exists() {
+            let _ = fs::copy(&wal, "/tmp/ferro_import_chrome_hist.sqlite-wal");
+        }
 
         let output = Command::new("sqlite3")
             .args([
@@ -165,7 +166,9 @@ impl BrowserImporter {
                 }
             }
         }
-        let _ = fs::remove_file(tmp_copy);
+        let _ = fs::remove_file(&tmp_copy);
+        let _ = fs::remove_file("/tmp/ferro_import_chrome_hist.sqlite-wal");
+        let _ = fs::remove_file("/tmp/ferro_import_chrome_hist.sqlite-shm");
         results
     }
 
@@ -178,6 +181,14 @@ impl BrowserImporter {
 
         let tmp_copy = PathBuf::from("/tmp/ferro_import_ff_places.sqlite");
         let _ = fs::copy(places_file, &tmp_copy);
+        let wal = places_file.with_file_name("places.sqlite-wal");
+        let shm = places_file.with_file_name("places.sqlite-shm");
+        if wal.exists() {
+            let _ = fs::copy(&wal, "/tmp/ferro_import_ff_places.sqlite-wal");
+        }
+        if shm.exists() {
+            let _ = fs::copy(&shm, "/tmp/ferro_import_ff_places.sqlite-shm");
+        }
 
         // Bookmarks
         if let Ok(out) = Command::new("sqlite3")
@@ -215,7 +226,9 @@ impl BrowserImporter {
             }
         }
 
-        let _ = fs::remove_file(tmp_copy);
+        let _ = fs::remove_file(&tmp_copy);
+        let _ = fs::remove_file("/tmp/ferro_import_ff_places.sqlite-wal");
+        let _ = fs::remove_file("/tmp/ferro_import_ff_places.sqlite-shm");
         (bookmarks, history)
     }
 

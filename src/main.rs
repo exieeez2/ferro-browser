@@ -15,8 +15,9 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use webkit2gtk::{
-    LoadEvent, NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt,
-    PolicyDecisionType, SettingsExt, URIRequestExt, WebInspectorExt, WebViewExt,
+    DownloadExt, LoadEvent, NavigationPolicyDecision, NavigationPolicyDecisionExt,
+    PolicyDecisionExt, PolicyDecisionType, SettingsExt, URIRequestExt, WebContextExt,
+    WebInspectorExt, WebViewExt, WebsiteDataManagerExtManual, WebsiteDataTypes,
 };
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
@@ -53,6 +54,7 @@ struct Tab {
 
 struct BrowserState {
     window: gtk::Window,
+    top_box: gtk::Box,
     stack: gtk::Stack,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
@@ -69,8 +71,11 @@ struct BrowserState {
     native_filter: Option<WebKitFilter>,
     dark_mode: bool,
     theme: String,
+    download_handler_attached: bool,
     settings_dirty: Arc<AtomicBool>,
     bookmarks_dirty: Arc<AtomicBool>,
+    history_dirty: Arc<AtomicBool>,
+    passwords_dirty: Arc<AtomicBool>,
     page_source_cache: Arc<Mutex<(String, String)>>,
 }
 
@@ -80,6 +85,7 @@ struct IpcMessage {
     url: Option<String>,
     id: Option<u32>,
     title: Option<String>,
+    pass: Option<String>,
     settings: Option<BrowserSettings>,
 }
 
@@ -190,8 +196,23 @@ fn sync_adblock_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
     }
 }
 
+fn compute_surface_rgba(s: &BrowserSettings) -> gdk::RGBA {
+    let alpha = ((100 - s.ui_transparency.min(60)) as f64) / 100.0;
+    if s.theme_mode == "light" {
+        gdk::RGBA::new(244.0 / 255.0, 244.0 / 255.0, 246.0 / 255.0, alpha)
+    } else {
+        gdk::RGBA::new(20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, alpha)
+    }
+}
+
 fn update_gtk_menu_css(css_provider: &gtk::CssProvider, s: &BrowserSettings) {
     let is_light = s.theme_mode == "light";
+    let alpha = ((100 - s.ui_transparency.min(60)) as f64) / 100.0;
+    let surface_css = if is_light {
+        format!("rgba(244, 244, 246, {:.2})", alpha)
+    } else {
+        format!("rgba(20, 20, 20, {:.2})", alpha)
+    };
     let (bg, fg, hover_bg, border) = if is_light {
         ("#ffffff", "#18181b", "#ececf1", "#d4d4d8")
     } else {
@@ -201,7 +222,10 @@ fn update_gtk_menu_css(css_provider: &gtk::CssProvider, s: &BrowserSettings) {
     let item_rad = rad.saturating_sub(2).max(2);
     let css = format!(
         "
-        window, .window, box, stack {{
+        window, .window, stack {{
+            background-color: {surface_css};
+        }}
+        box {{
             background-color: transparent;
         }}
         menu {{
@@ -281,10 +305,137 @@ fn render_source_viewer_html(url: &str, raw_html: &str, s: &BrowserSettings) -> 
     )
 }
 
+fn attach_download_handler(ctx: &webkit2gtk::WebContext, state_weak: Weak<RefCell<BrowserState>>) {
+    ctx.connect_download_started(move |_ctx, download| {
+        let state_weak_dest = state_weak.clone();
+        download.connect_decide_destination(move |dl, suggested_filename| {
+            let dl_dir = BrowserSettings::load_or_default().download_dir;
+            let base_dir = if dl_dir.trim().is_empty() {
+                dirs::download_dir()
+                    .or_else(dirs::home_dir)
+                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            } else {
+                std::path::PathBuf::from(dl_dir)
+            };
+            let _ = std::fs::create_dir_all(&base_dir);
+
+            let safe_name = if suggested_filename.trim().is_empty() {
+                "download.bin"
+            } else {
+                suggested_filename
+            };
+            let mut dest_path = base_dir.join(safe_name);
+            if dest_path.exists() {
+                let stem = dest_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                let ext = dest_path
+                    .extension()
+                    .map(|e| format!(".{}", e.to_string_lossy()))
+                    .unwrap_or_default();
+                for n in 1..1000 {
+                    let candidate = base_dir.join(format!("{} ({}){}", stem, n, ext));
+                    if !candidate.exists() {
+                        dest_path = candidate;
+                        break;
+                    }
+                }
+            }
+
+            let uri = format!("file://{}", dest_path.to_string_lossy());
+            dl.set_destination(&uri);
+
+            let saved_display = dest_path.to_string_lossy().replace('\\', "/").replace('\'', "\\'");
+            if let Some(state_rc) = state_weak_dest.upgrade() {
+                let active_wv = state_rc.try_borrow().ok().and_then(|s| {
+                    s.active_tab_id.and_then(|id| {
+                        s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
+                    })
+                });
+                if let Some(wv) = active_wv {
+                    let js = format!(
+                        r#"(function(){{
+                            const t = document.createElement('div');
+                            t.textContent = 'Загрузка начата: {0}';
+                            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
+                            (document.body||document.documentElement).appendChild(t);
+                            setTimeout(() => t.remove(), 2600);
+                        }})();"#,
+                        saved_display
+                    );
+                    let _ = wv.evaluate_script(&js);
+                }
+            }
+            true
+        });
+
+        let state_weak_fin = state_weak.clone();
+        download.connect_finished(move |dl| {
+            let dest = dl
+                .destination()
+                .map(|d| d.strip_prefix("file://").unwrap_or(&d).to_string())
+                .unwrap_or_default();
+            if let Some(state_rc) = state_weak_fin.upgrade() {
+                let active_wv = state_rc.try_borrow().ok().and_then(|s| {
+                    s.active_tab_id.and_then(|id| {
+                        s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
+                    })
+                });
+                if let Some(wv) = active_wv {
+                    let safe_dest = dest.replace('\\', "/").replace('\'', "\\'");
+                    let js = format!(
+                        r#"(function(){{
+                            const t = document.createElement('div');
+                            t.textContent = 'Файл сохранён: {0}';
+                            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
+                            (document.body||document.documentElement).appendChild(t);
+                            setTimeout(() => t.remove(), 3200);
+                        }})();"#,
+                        safe_dest
+                    );
+                    let _ = wv.evaluate_script(&js);
+                }
+            }
+        });
+    });
+}
+
 fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
     let (settings_json, top_wv, tab_wvs) = {
         if let Ok(state) = state_rc.try_borrow() {
             update_gtk_menu_css(&state.css_provider, &state.settings);
+            let top_h = if state.settings.show_bookmarks_bar { 102 } else { 74 };
+            state.top_box.set_size_request(-1, top_h);
+
+            let surface_rgba = compute_surface_rgba(&state.settings);
+            let zoom_factor = (state.settings.default_zoom.clamp(50, 200) as f64) / 100.0;
+            state.adblocker.set_enabled(state.settings.adblock_enabled);
+
+            for t in &state.tabs {
+                t.inner.set_background_color(&surface_rgba);
+                t.inner.set_zoom_level(zoom_factor);
+                if let Some(wk_s) = WebViewExt::settings(&t.inner) {
+                    wk_s.set_enable_smooth_scrolling(state.settings.smooth_scrolling);
+                    wk_s.set_enable_webgl(state.settings.enable_webgl);
+                    let is_internal = t.url.starts_with("ferro://") || t.url.is_empty();
+                    wk_s.set_enable_javascript(is_internal || state.settings.enable_javascript);
+                }
+                if let Some(ucm) = t.inner.user_content_manager() {
+                    if let Some(filter) = &state.native_filter {
+                        if state.settings.adblock_enabled {
+                            attach_to_ucm(&ucm, filter);
+                        } else {
+                            detach_from_ucm(&ucm, filter);
+                        }
+                    }
+                }
+            }
+
+            if let Some(top) = &state.top_webview {
+                top.webview().set_background_color(&surface_rgba);
+            }
+
             let tabs: Vec<Rc<WebView>> = state.tabs.iter().map(|t| t.webview.clone()).collect();
             (
                 serde_json::to_string(&state.settings).unwrap_or_else(|_| "{}".to_string()),
@@ -309,6 +460,7 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
         );
         let _ = tab.evaluate_script(&js);
     }
+    sync_adblock_to_ui(state_rc);
 }
 
 fn switch_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
@@ -379,12 +531,27 @@ fn close_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
 }
 
 fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
-    let (tab_id, adblocker, native_filter, stack, autofill_script, dynamic_theme_css, settings_json, settings_dirty, bookmarks_dirty, source_cache) = {
+    let (
+        tab_id,
+        adblocker,
+        native_filter,
+        stack,
+        autofill_script,
+        dynamic_theme_css,
+        settings_snapshot,
+        settings_json,
+        settings_dirty,
+        bookmarks_dirty,
+        history_dirty,
+        passwords_dirty,
+        source_cache,
+    ) = {
         if let Ok(mut state) = state_rc.try_borrow_mut() {
             let id = state.next_tab_id;
             state.next_tab_id += 1;
             let autofill = state.passwords.generate_autofill_script();
             let theme_css = state.settings.generate_css_variables();
+            let s_snap = state.settings.clone();
             let s_json = serde_json::to_string(&state.settings).unwrap_or_else(|_| "{}".to_string());
             (
                 id,
@@ -393,9 +560,12 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 state.stack.clone(),
                 autofill,
                 theme_css,
+                s_snap,
                 s_json,
                 state.settings_dirty.clone(),
                 state.bookmarks_dirty.clone(),
+                state.history_dirty.clone(),
+                state.passwords_dirty.clone(),
                 state.page_source_cache.clone(),
             )
         } else {
@@ -468,6 +638,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
     let protocol_already_registered = state_mut.web_context.is_custom_protocol_registered("ferro");
     let mut builder = WebViewBuilder::new_with_web_context(&mut state_mut.web_context);
     if !protocol_already_registered {
+        let blocked_counter = adblocker.blocked_counter();
         builder = builder.with_custom_protocol("ferro".into(), move |_id, req| {
             let uri = req.uri().to_string();
             let path_and_query = uri.strip_prefix("ferro://").unwrap_or(&uri);
@@ -483,6 +654,17 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                     .map(|g| g.clone())
                     .unwrap_or_else(|_| ("about:blank".to_string(), String::new()));
                 (render_source_viewer_html(&src_url, &src_html, &s), "text/html; charset=utf-8")
+            } else if path_and_query.starts_with("api/stats/get") {
+                let h = HistoryData::load_or_default();
+                let p = PasswordsData::load_or_default();
+                let b = BookmarksData::load_or_default();
+                let json = serde_json::json!({
+                    "blocked_count": blocked_counter.load(Ordering::Relaxed),
+                    "history_count": h.items.len(),
+                    "passwords_count": p.items.len(),
+                    "bookmarks_count": b.items.len(),
+                });
+                (json.to_string(), "application/json")
             } else if path_and_query.starts_with("api/settings/get") {
                 let s = BrowserSettings::load_or_default();
                 (serde_json::to_string(&s).unwrap_or_default(), "application/json")
@@ -502,16 +684,26 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 let browser_id = path_and_query.split("browser=").nth(1).unwrap_or("chrome").split('&').next().unwrap_or("chrome");
                 let res = BrowserImporter::execute_import(browser_id);
                 bookmarks_dirty.store(true, Ordering::SeqCst);
+                history_dirty.store(true, Ordering::SeqCst);
                 (serde_json::to_string(&res).unwrap_or_default(), "application/json")
             } else if path_and_query.starts_with("api/import/dismiss") {
                 let mut s = BrowserSettings::load_or_default();
                 s.has_prompted_import = true;
                 let _ = s.save();
+                settings_dirty.store(true, Ordering::SeqCst);
                 (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/session/detect") {
                 let res = if let Some(session) = SessionData::load() {
-                    let count = session.tabs.len();
-                    format!(r#"{{"has_session":true,"tabs_count":{}}}"#, count)
+                    let count = session
+                        .tabs
+                        .iter()
+                        .filter(|t| t.url != "ferro://newtab")
+                        .count();
+                    if count > 0 {
+                        format!(r#"{{"has_session":true,"tabs_count":{}}}"#, count)
+                    } else {
+                        r#"{"has_session":false,"tabs_count":0}"#.to_string()
+                    }
                 } else {
                     r#"{"has_session":false,"tabs_count":0}"#.to_string()
                 };
@@ -530,21 +722,24 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                     if let Ok(id) = id_str.split('&').next().unwrap_or("").parse::<u64>() {
                         let mut h = HistoryData::load_or_default();
                         h.delete(id);
+                        history_dirty.store(true, Ordering::SeqCst);
                     }
                 }
-                (r#"<script>window.location.href="ferro://history";</script>"#.to_string(), "text/html; charset=utf-8")
+                (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/history/clear") {
                 let mut h = HistoryData::load_or_default();
                 h.clear();
-                (r#"<script>window.location.href="ferro://history";</script>"#.to_string(), "text/html; charset=utf-8")
+                history_dirty.store(true, Ordering::SeqCst);
+                (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/passwords/delete") {
                 if let Some(id_str) = path_and_query.split("id=").nth(1) {
                     if let Ok(id) = id_str.split('&').next().unwrap_or("").parse::<u64>() {
                         let mut p = PasswordsData::load_or_default();
                         p.delete(id);
+                        passwords_dirty.store(true, Ordering::SeqCst);
                     }
                 }
-                (r#"<script>window.location.href="ferro://passwords";</script>"#.to_string(), "text/html; charset=utf-8")
+                (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/passwords/save") {
                 let query = path_and_query.split('?').nth(1).unwrap_or("");
                 let mut origin = String::new();
@@ -566,6 +761,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 if !origin.is_empty() && !pass.is_empty() {
                     let mut p = PasswordsData::load_or_default();
                     p.add(&origin, &user, &pass);
+                    passwords_dirty.store(true, Ordering::SeqCst);
                 }
                 (r#"{"status":"saved"}"#.to_string(), "application/json")
             } else if path_and_query.starts_with("api/passwords/import") {
@@ -573,6 +769,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 if let Ok(csv_text) = std::str::from_utf8(body_bytes) {
                     let mut p = PasswordsData::load_or_default();
                     p.import_chrome_csv(csv_text);
+                    passwords_dirty.store(true, Ordering::SeqCst);
                 }
                 (r#"{"status":"ok"}"#.to_string(), "application/json")
             } else {
@@ -608,14 +805,33 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
 
     let inner_wv = webview.webview();
 
-    // Set Chrome User-Agent for Google accounts login, enable WebInspector & modern web APIs
+    // Immediately set theme surface background color on the WebKitGTK widget BEFORE loading URI
+    // so there is NEVER a transparent see-through desktop flash when opening a new tab!
+    inner_wv.set_background_color(&compute_surface_rgba(&settings_snapshot));
+    inner_wv.set_zoom_level((settings_snapshot.default_zoom.clamp(50, 200) as f64) / 100.0);
+
+    // Attach global WebKit download handler once on the shared WebContext
+    {
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            if !st.download_handler_attached {
+                if let Some(wk_ctx) = inner_wv.context() {
+                    attach_download_handler(&wk_ctx, Rc::downgrade(state_rc));
+                    st.download_handler_attached = true;
+                }
+            }
+        }
+    }
+
+    // Set Chrome User-Agent for Google accounts login, enable WebInspector & user engine settings
     if let Some(settings) = WebViewExt::settings(&inner_wv) {
         settings.set_user_agent(Some(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         ));
         settings.set_enable_developer_extras(true);
-        settings.set_enable_webgl(true);
-        settings.set_enable_smooth_scrolling(true);
+        settings.set_enable_webgl(settings_snapshot.enable_webgl);
+        settings.set_enable_smooth_scrolling(settings_snapshot.smooth_scrolling);
+        let is_internal = target_url.starts_with("ferro://") || target_url.is_empty();
+        settings.set_enable_javascript(is_internal || settings_snapshot.enable_javascript);
         settings.set_enable_javascript_markup(true);
         settings.set_enable_media_stream(true);
         settings.set_enable_mediasource(true);
@@ -675,6 +891,10 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
             let new_uri = wv.uri().map(|u| u.to_string()).unwrap_or_default();
             {
                 if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    let allow_js = new_uri.starts_with("ferro://") || new_uri.is_empty() || state.settings.enable_javascript;
+                    if let Some(wk_s) = WebViewExt::settings(wv) {
+                        wk_s.set_enable_javascript(allow_js);
+                    }
                     if let Some(tab) = state.tabs.iter_mut().find(|t| t.id == tab_id_copy) {
                         tab.url = new_uri;
                     }
@@ -939,8 +1159,22 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         }
         "restore_session" => {
             if let Some(session) = SessionData::load() {
+                let single_blank_id = {
+                    if let Ok(state) = state_rc.try_borrow() {
+                        if state.tabs.len() == 1 && state.tabs[0].url == "ferro://newtab" {
+                            Some(state.tabs[0].id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
                 for tab in session.tabs {
                     create_tab(state_rc, &tab.url);
+                }
+                if let Some(blank_id) = single_blank_id {
+                    close_tab(state_rc, blank_id);
                 }
                 SessionData::clear();
             }
@@ -1018,17 +1252,23 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "go_home" => {
-            let wry_wv = {
+            let home_target = {
                 if let Ok(state) = state_rc.try_borrow() {
+                    let h = state.settings.homepage_url.clone();
+                    let target_url = if h.trim().is_empty() { "ferro://newtab".to_string() } else { h };
                     state.active_tab_id.and_then(|id| {
-                        state.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
+                        state.tabs.iter().find(|t| t.id == id).map(|t| (target_url, t.webview.clone(), t.inner.clone()))
                     })
                 } else {
                     None
                 }
             };
-            if let Some(wry_wv) = wry_wv {
-                let _ = wry_wv.load_url("ferro://newtab");
+            if let Some((home_url, wry_wv, inner)) = home_target {
+                if home_url.starts_with("ferro://") {
+                    let _ = wry_wv.load_url(&home_url);
+                } else {
+                    inner.load_uri(&home_url);
+                }
             }
         }
         "toggle_bookmark" => {
@@ -1080,8 +1320,10 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         }
         "toggle_adblock" => {
             let info = {
-                if let Ok(state) = state_rc.try_borrow() {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
                     let enabled = state.adblocker.toggle_enabled();
+                    state.settings.adblock_enabled = enabled;
+                    let _ = state.settings.save();
                     let ucms: Vec<_> = state.tabs.iter().filter_map(|t| t.inner.user_content_manager()).collect();
                     Some((enabled, state.native_filter.clone(), ucms))
                 } else {
@@ -1100,7 +1342,131 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     }
                 }
             }
-            sync_adblock_to_ui(state_rc);
+            sync_settings_to_ui(state_rc);
+        }
+        "toggle_bookmarks_bar" => {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.settings.show_bookmarks_bar = !state.settings.show_bookmarks_bar;
+                let _ = state.settings.save();
+            }
+            sync_settings_to_ui(state_rc);
+        }
+        "zoom_step" => {
+            let step_up = msg.id.unwrap_or(1) == 1;
+            let inner = {
+                if let Ok(state) = state_rc.try_borrow() {
+                    state.active_tab_id.and_then(|id| {
+                        state.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone())
+                    })
+                } else {
+                    None
+                }
+            };
+            if let Some(inner) = inner {
+                let cur = inner.zoom_level();
+                let next = if step_up { (cur + 0.1).min(3.0) } else { (cur - 0.1).max(0.3) };
+                inner.set_zoom_level(next);
+            }
+        }
+        "zoom_reset" => {
+            let (inner, def_zoom) = {
+                if let Ok(state) = state_rc.try_borrow() {
+                    let dz = (state.settings.default_zoom.clamp(50, 200) as f64) / 100.0;
+                    let wv = state.active_tab_id.and_then(|id| {
+                        state.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone())
+                    });
+                    (wv, dz)
+                } else {
+                    (None, 1.0)
+                }
+            };
+            if let Some(inner) = inner {
+                inner.set_zoom_level(def_zoom);
+            }
+        }
+        "save_password" => {
+            if let (Some(origin), Some(pass)) = (msg.url, msg.pass) {
+                let user = msg.title.unwrap_or_default();
+                if !origin.is_empty() && !pass.is_empty() {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        state.passwords.add(&origin, &user, &pass);
+                    }
+                }
+            }
+        }
+        "clear_history" => {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.history.clear();
+            }
+        }
+        "clear_passwords" => {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.passwords.clear();
+            }
+        }
+        "clear_cache" => {
+            let wk_ctx = {
+                if let Ok(state) = state_rc.try_borrow() {
+                    state.tabs.first().and_then(|t| t.inner.context())
+                } else {
+                    None
+                }
+            };
+            if let Some(ctx) = wk_ctx {
+                ctx.clear_cache();
+                if let Some(mgr) = ctx.website_data_manager() {
+                    mgr.clear(
+                        WebsiteDataTypes::DISK_CACHE | WebsiteDataTypes::MEMORY_CACHE,
+                        glib::TimeSpan::from_seconds(0),
+                        gtk::gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                }
+            }
+        }
+        "clear_site_data" => {
+            let wk_ctx = {
+                if let Ok(state) = state_rc.try_borrow() {
+                    state.tabs.first().and_then(|t| t.inner.context())
+                } else {
+                    None
+                }
+            };
+            if let Some(ctx) = wk_ctx {
+                ctx.clear_cache();
+                if let Some(mgr) = ctx.website_data_manager() {
+                    mgr.clear(
+                        WebsiteDataTypes::ALL,
+                        glib::TimeSpan::from_seconds(0),
+                        gtk::gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                }
+            }
+        }
+        "pick_download_dir" => {
+            let win_opt = state_rc.try_borrow().ok().map(|s| s.window.clone());
+            let state_weak = Rc::downgrade(state_rc);
+            glib::idle_add_local_once(move || {
+                let dialog = gtk::FileChooserNative::new(
+                    Some("Выбрать папку для загрузок"),
+                    win_opt.as_ref(),
+                    gtk::FileChooserAction::SelectFolder,
+                    Some("Выбрать"),
+                    Some("Отмена"),
+                );
+                if dialog.run() == gtk::ResponseType::Accept {
+                    if let Some(folder) = dialog.filename() {
+                        if let Some(state_rc) = state_weak.upgrade() {
+                            if let Ok(mut st) = state_rc.try_borrow_mut() {
+                                st.settings.download_dir = folder.to_string_lossy().to_string();
+                                let _ = st.settings.save();
+                            }
+                            sync_settings_to_ui(&state_rc);
+                        }
+                    }
+                }
+            });
         }
         "toggle_theme" => {
             if let Ok(mut state) = state_rc.try_borrow_mut() {
@@ -1201,20 +1567,26 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             let info = {
                 if let Ok(state) = state_rc.try_borrow() {
                     let (w, h) = state.window.size();
+                    let top_h = if state.settings.show_bookmarks_bar { 102 } else { 74 };
+                    let dl_dir = state.settings.download_dir.clone();
                     let active_wv = state.active_tab_id.and_then(|id| {
                         state.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
                     });
-                    state.window.window().map(|gw| (gw, w, h, active_wv))
+                    state.window.window().map(|gw| (gw, w, h, top_h, dl_dir, active_wv))
                 } else {
                     None
                 }
             };
-            if let Some((gdk_win, w, h, active_wv)) = info {
-                let cap_h = (h - 102).max(1);
-                if let Some(pixbuf) = gdk_win.pixbuf(0, 102, w, cap_h) {
-                    let dir = dirs::picture_dir()
-                        .or_else(dirs::download_dir)
-                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            if let Some((gdk_win, w, h, top_h, dl_dir, active_wv)) = info {
+                let cap_h = (h - top_h).max(1);
+                if let Some(pixbuf) = gdk_win.pixbuf(0, top_h, w, cap_h) {
+                    let dir = if !dl_dir.trim().is_empty() {
+                        std::path::PathBuf::from(dl_dir)
+                    } else {
+                        dirs::picture_dir()
+                            .or_else(dirs::download_dir)
+                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                    };
                     let _ = std::fs::create_dir_all(&dir);
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -1319,6 +1691,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                                 url: Some(u1.clone()),
                                 id: None,
                                 title: None,
+                                pass: None,
                                 settings: None,
                             });
                         });
@@ -1414,14 +1787,14 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     let item_adblock = gtk::MenuItem::with_label(&ab_label);
                     let s_rc = state_rc.clone();
                     item_adblock.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_adblock".to_string(), url: None, id: None, title: None, settings: None });
+                        handle_ipc(&s_rc, IpcMessage { action: "toggle_adblock".to_string(), url: None, id: None, title: None, pass: None, settings: None });
                     });
                     menu.append(&item_adblock);
 
                     let item_theme = gtk::MenuItem::with_label(&th_label);
                     let s_rc = state_rc.clone();
                     item_theme.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_theme".to_string(), url: None, id: None, title: None, settings: None });
+                        handle_ipc(&s_rc, IpcMessage { action: "toggle_theme".to_string(), url: None, id: None, title: None, pass: None, settings: None });
                     });
                     menu.append(&item_theme);
 
@@ -1568,17 +1941,19 @@ fn main() {
     window.add(&vbox);
 
     let top_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    top_box.set_size_request(-1, 102); // 36px tabs + 38px toolbar + 28px bookmarks = 102px
-    vbox.pack_start(&top_box, false, false, 0);
-
-    let stack = gtk::Stack::new();
-    vbox.pack_start(&stack, true, true, 0);
-
     let bookmarks = BookmarksData::load_or_default();
     let history = HistoryData::load_or_default();
     let passwords = PasswordsData::load_or_default();
     let adblocker = AdBlocker::new();
     let settings = BrowserSettings::load_or_default();
+    adblocker.set_enabled(settings.adblock_enabled);
+    let initial_top_h = if settings.show_bookmarks_bar { 102 } else { 74 };
+    top_box.set_size_request(-1, initial_top_h);
+    vbox.pack_start(&top_box, false, false, 0);
+
+    let stack = gtk::Stack::new();
+    vbox.pack_start(&stack, true, true, 0);
+
     let theme_mode = settings.theme_mode.clone();
 
     let profile_dir = dirs::config_dir()
@@ -1599,11 +1974,15 @@ fn main() {
 
     let settings_dirty = Arc::new(AtomicBool::new(false));
     let bookmarks_dirty = Arc::new(AtomicBool::new(false));
+    let history_dirty = Arc::new(AtomicBool::new(false));
+    let passwords_dirty = Arc::new(AtomicBool::new(false));
     let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let initial_settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string());
+    let initial_surface_rgba = compute_surface_rgba(&settings);
 
     let state = Rc::new(RefCell::new(BrowserState {
         window: window.clone(),
+        top_box: top_box.clone(),
         stack,
         css_provider,
         top_webview: None,
@@ -1620,12 +1999,15 @@ fn main() {
         native_filter: None,
         dark_mode: false,
         theme: theme_mode,
+        download_handler_attached: false,
         settings_dirty: settings_dirty.clone(),
         bookmarks_dirty: bookmarks_dirty.clone(),
+        history_dirty: history_dirty.clone(),
+        passwords_dirty: passwords_dirty.clone(),
         page_source_cache,
     }));
 
-    // Background watcher for settings/bookmarks saved via ferro://api/* custom protocol
+    // Background watcher for settings/bookmarks/history/passwords saved via ferro://api/* custom protocol
     let state_for_watcher = state.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(180), move || {
         if settings_dirty.swap(false, Ordering::SeqCst) {
@@ -1641,6 +2023,16 @@ fn main() {
                 st.bookmarks = BookmarksData::load_or_default();
             }
             sync_bookmarks_to_ui(&state_for_watcher);
+        }
+        if history_dirty.swap(false, Ordering::SeqCst) {
+            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
+                st.history = HistoryData::load_or_default();
+            }
+        }
+        if passwords_dirty.swap(false, Ordering::SeqCst) {
+            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
+                st.passwords = PasswordsData::load_or_default();
+            }
         }
         glib::ControlFlow::Continue
     });
@@ -1711,6 +2103,7 @@ fn main() {
             panic!("Не удалось создать верхний UI Webview: {:?}", e);
         }
     };
+    top_webview.webview().set_background_color(&initial_surface_rgba);
     top_webview.webview().connect_context_menu(|_wv, _menu, _event, _hit_test| true);
 
     state.borrow_mut().top_webview = Some(top_webview);
@@ -1753,6 +2146,17 @@ fn main() {
                     url: None,
                     id: None,
                     title: None,
+                    pass: None,
+                    settings: None,
+                });
+                return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::b || key == gdk::keys::constants::B || key == gdk::keys::constants::Cyrillic_i || key == gdk::keys::constants::Cyrillic_I {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "toggle_bookmarks_bar".to_string(),
+                    url: None,
+                    id: None,
+                    title: None,
+                    pass: None,
                     settings: None,
                 });
                 return glib::Propagation::Stop;
@@ -1798,6 +2202,7 @@ fn main() {
                     url: None,
                     id: None,
                     title: None,
+                    pass: None,
                     settings: None,
                 });
                 return glib::Propagation::Stop;
@@ -1807,6 +2212,7 @@ fn main() {
                     url: None,
                     id: None,
                     title: None,
+                    pass: None,
                     settings: None,
                 });
                 return glib::Propagation::Stop;
@@ -1817,10 +2223,41 @@ fn main() {
                         url: None,
                         id: Some(digit),
                         title: None,
+                        pass: None,
+                        settings: None,
+                    });
+                    return glib::Propagation::Stop;
+                } else if digit == 0 {
+                    handle_ipc(&state_for_keys, IpcMessage {
+                        action: "zoom_reset".to_string(),
+                        url: None,
+                        id: None,
+                        title: None,
+                        pass: None,
                         settings: None,
                     });
                     return glib::Propagation::Stop;
                 }
+            } else if key == gdk::keys::constants::plus || key == gdk::keys::constants::equal {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "zoom_step".to_string(),
+                    url: None,
+                    id: Some(1),
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
+                return glib::Propagation::Stop;
+            } else if key == gdk::keys::constants::minus || key == gdk::keys::constants::underscore {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "zoom_step".to_string(),
+                    url: None,
+                    id: Some(0),
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
+                return glib::Propagation::Stop;
             }
         } else if alt {
             if key == gdk::keys::constants::Left {
@@ -1882,6 +2319,7 @@ fn main() {
                 url: None,
                 id: None,
                 title: None,
+                pass: None,
                 settings: None,
             });
             return glib::Propagation::Stop;

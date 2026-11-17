@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub struct AdBlocker {
     enabled: AtomicBool,
-    blocked_count: AtomicUsize,
+    blocked_count: Arc<AtomicUsize>,
     engine: Engine,
 }
 
@@ -878,7 +878,7 @@ impl AdBlocker {
 
         Arc::new(Self {
             enabled: AtomicBool::new(true),
-            blocked_count: AtomicUsize::new(0),
+            blocked_count: Arc::new(AtomicUsize::new(0)),
             engine,
         })
     }
@@ -887,7 +887,6 @@ impl AdBlocker {
         self.enabled.load(Ordering::Relaxed)
     }
 
-    #[allow(dead_code)]
     pub fn set_enabled(&self, val: bool) {
         self.enabled.store(val, Ordering::Relaxed);
     }
@@ -899,6 +898,10 @@ impl AdBlocker {
 
     pub fn blocked_count(&self) -> usize {
         self.blocked_count.load(Ordering::Relaxed)
+    }
+
+    pub fn blocked_counter(&self) -> Arc<AtomicUsize> {
+        self.blocked_count.clone()
     }
 
     pub fn increment_blocked(&self) {

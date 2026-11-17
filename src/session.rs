@@ -32,12 +32,23 @@ impl SessionData {
             .unwrap_or_default()
             .as_secs();
 
-        // Filter out empty tabs or solitary newtab
+        // Filter out empty tabs, settings/internal utility views, or solitary newtab
         let valid_tabs: Vec<SessionTab> = tabs
             .iter()
-            .filter(|t| !t.url.is_empty() && t.url != "about:blank")
+            .filter(|t| {
+                !t.url.is_empty()
+                    && t.url != "about:blank"
+                    && t.url != "ferro://newtab"
+                    && t.url != "ferro://settings"
+                    && t.url != "ferro://view-source"
+            })
             .cloned()
             .collect();
+
+        if valid_tabs.is_empty() {
+            Self::clear();
+            return Ok(());
+        }
 
         let data = SessionData {
             tabs: valid_tabs,

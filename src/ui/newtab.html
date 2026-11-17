@@ -4,9 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Новая вкладка — Ferro</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
     :root {
       --bg-surface: #141414;
@@ -926,6 +923,17 @@
     document.getElementById('toggleShortcutsBtn').addEventListener('click', () => {
       state.showShortcuts = !state.showShortcuts;
       saveVal('ferro_ntp_show_sc', state.showShortcuts);
+      if (state.browserSettings) {
+        state.browserSettings.show_ntp_shortcuts = state.showShortcuts;
+        if (window.ipc) {
+          window.ipc.postMessage(JSON.stringify({ action: 'save_settings', settings: state.browserSettings }));
+        }
+        fetch('ferro://api/settings/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(state.browserSettings)
+        }).catch(() => {});
+      }
       render();
     });
 
@@ -998,6 +1006,11 @@
         saveVal('ferro_ntp_engine_id', s.search_engine);
       }
 
+      if (s.show_ntp_shortcuts !== undefined) {
+        state.showShortcuts = Boolean(s.show_ntp_shortcuts);
+        saveVal('ferro_ntp_show_sc', state.showShortcuts);
+      }
+
       if (s.accent_color) {
         const effectiveAcc = (isLight && s.accent_color.toLowerCase() === '#ececec') ? '#18181b' : s.accent_color;
         root.style.setProperty('--accent', effectiveAcc);
@@ -1045,7 +1058,7 @@
         }
       }
 
-      renderEngineSelector();
+      render();
     };
 
     fetch('ferro://api/settings/get')

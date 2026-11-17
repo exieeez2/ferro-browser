@@ -178,6 +178,16 @@ pub const ADBLOCK_JS: &str = r#"
     if (window._ferro_adblock_installed) return;
     window._ferro_adblock_installed = true;
 
+    const ferroCfg = window._ferro_settings || {};
+    if (ferroCfg.do_not_track !== false) {
+        try {
+            Object.defineProperty(navigator, 'doNotTrack', { get: () => '1', configurable: true });
+            Object.defineProperty(navigator, 'globalPrivacyControl', { get: () => true, configurable: true });
+        } catch(e) {}
+    }
+
+    if (ferroCfg.adblock_enabled === false) return;
+
     const AD_DOMAINS = [
         'doubleclick.', 'googlesyndication.', 'googleadservices.', 'googleads.', 'pagead',
         'adservice.google', 'googletagservices.', 'googletagmanager.', 'google-analytics.',
@@ -1659,6 +1669,56 @@ pub const HOTKEYS_JS: &str = r#"
             e.stopPropagation();
             if (window.ipc) {
                 window.ipc.postMessage(JSON.stringify({ action: 'inspect_element' }));
+            }
+            return;
+        }
+
+        // Ctrl+Shift+B: Toggle Bookmarks Bar
+        if (e.ctrlKey && e.shiftKey && (e.key === 'b' || e.key === 'B' || e.key === 'и' || e.key === 'И' || e.code === 'KeyB')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'toggle_bookmarks_bar' }));
+            }
+            return;
+        }
+
+        // Ctrl + =/+/-/0: Page Zoom
+        if (e.ctrlKey && !e.altKey && (e.key === '=' || e.key === '+' || e.code === 'Equal')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'zoom_step', id: 1 }));
+            }
+            return;
+        }
+        if (e.ctrlKey && !e.altKey && (e.key === '-' || e.key === '_' || e.code === 'Minus')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'zoom_step', id: 0 }));
+            }
+            return;
+        }
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === '0' || e.code === 'Digit0')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'zoom_reset' }));
+            }
+            return;
+        }
+
+        // Ctrl+S: Save Page As
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S' || e.key === 'ы' || e.key === 'Ы' || e.code === 'KeyS')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc && document.documentElement) {
+                window.ipc.postMessage(JSON.stringify({
+                    action: 'save_page_html',
+                    url: window.location.href,
+                    title: '<!DOCTYPE html>\n' + document.documentElement.outerHTML
+                }));
             }
             return;
         }
