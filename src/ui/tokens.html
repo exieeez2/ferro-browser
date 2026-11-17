@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CSS-токены — Ferro</title>
+  <style>
+    :root {
+      --bg-surface: #141414;
+      --bg-elevated: #1c1c1c;
+      --bg-hover: #262626;
+      --border-hairline: #2a2a2a;
+      --border-strong: #3c3c3c;
+      --text-primary: #ececec;
+      --text-secondary: #9c9c9c;
+      --text-muted: #686868;
+      --radius-ctrl: 2px;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      padding: 36px 20px;
+    }
+
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      animation: pageIn 0.16s cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    @keyframes pageIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .header-box {
+      padding: 18px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .title { font-size: 16px; font-weight: 600; }
+    .subtitle { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+    .badge {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 4px 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      color: var(--text-secondary);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 10px;
+    }
+
+    .card {
+      padding: 14px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .card-key {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .card-val {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header-box">
+      <div>
+        <div class="title">Ferro Monochrome Design Specification</div>
+        <div class="subtitle">Палитра и геометрические спецификации интерфейса wry GTK.</div>
+      </div>
+      <div class="badge">GTK3 + WebKit2GTK</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <span class="card-key">Палитра фона</span>
+        <span class="card-val">#111111 (Tabs) / #1c1c1c (Toolbar) / #141414 (Viewport)</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Разделители</span>
+        <span class="card-val">1px solid #2a2a2a (Hairline)</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Скругления (Радиусы)</span>
+        <span class="card-val">0px (Вкладки, Окно) / 2px (Омнибокс, Кнопки)</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Типографика</span>
+        <span class="card-val">Inter, System UI, JetBrains Mono</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Вкладки</span>
+        <span class="card-val">Obsidian flush style, 1px разделители, без цветной полосы</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Анимации</span>
+        <span class="card-val">120-160ms cubic-bezier(0.2, 0, 0, 1)</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Блокировщик рекламы</span>
+        <span class="card-val">adblock-rust (Brave) перехват сетевых запросов</span>
+      </div>
+      <div class="card">
+        <span class="card-key">Инъекции JS/CSS</span>
+        <span class="card-val">initialization_script + evaluate_script</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

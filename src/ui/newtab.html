@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Новая вкладка — Ferro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-surface: #141414;
+      --bg-elevated: rgba(30, 30, 34, 0.92);
+      --bg-hover: rgba(46, 46, 52, 0.95);
+      --bg-input: #1a1a1d;
+      --pill-bg: rgba(255, 255, 255, 0.12);
+      --pill-hover: rgba(255, 255, 255, 0.18);
+      --border-hairline: rgba(255, 255, 255, 0.10);
+      --border-strong: rgba(255, 255, 255, 0.22);
+      --accent: #ececec;
+      --accent-subtle: rgba(236, 236, 236, 0.18);
+      --text-primary: #ececec;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --danger: #ef4444;
+      --radius-ctrl: 6px;
+      --radius-tile: 10px;
+      --radius-search: 14px;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+
+    :root[data-theme="light"], [data-theme="light"] {
+      --bg-surface: #f4f4f6;
+      --bg-elevated: rgba(255, 255, 255, 0.92);
+      --bg-hover: rgba(236, 236, 240, 0.96);
+      --bg-input: #ffffff;
+      --pill-bg: rgba(0, 0, 0, 0.07);
+      --pill-hover: rgba(0, 0, 0, 0.12);
+      --border-hairline: rgba(0, 0, 0, 0.10);
+      --border-strong: rgba(0, 0, 0, 0.22);
+      --text-primary: #18181b;
+      --text-secondary: #52525b;
+      --text-muted: #71717a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      min-height: 100vh;
+      font-family: var(--font-sans);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wallpaper-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      z-index: -1;
+      pointer-events: none;
+      transition: opacity 0.3s ease, filter 0.3s ease;
+      opacity: 0;
+    }
+
+    .wallpaper-bg.active {
+      opacity: 1;
+    }
+
+    .import-banner {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-ctrl);
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      animation: bannerSlide 0.25s ease;
+    }
+
+    @keyframes bannerSlide {
+      from { transform: translate(-50%, -16px); opacity: 0; }
+      to { transform: translate(-50%, 0); opacity: 1; }
+    }
+
+    .import-banner span {
+      font-size: 13px;
+      color: var(--text-primary);
+    }
+
+    .import-banner .btn-action {
+      padding: 6px 13px;
+      background: var(--accent);
+      color: #111111;
+      border: none;
+      border-radius: var(--radius-ctrl);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .import-banner .btn-dismiss {
+      padding: 5px 10px;
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .page {
+      min-height: 100vh;
+      width: 100%;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .gear-btn {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      width: 34px;
+      height: 34px;
+      border: 1px solid transparent;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(10px);
+      color: var(--text-secondary);
+      border-radius: var(--radius-ctrl);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 10;
+      transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    }
+
+    .gear-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--border-strong);
+    }
+
+    .settings-popover {
+      position: fixed;
+      top: 56px;
+      right: 16px;
+      width: 268px;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-ctrl);
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 25;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    }
+
+    .settings-popover.open {
+      display: flex;
+      animation: popIn 0.14s cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .popover-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+
+    .kbd {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .menu-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 9px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-primary);
+      border-radius: var(--radius-ctrl);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .menu-row:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-hairline);
+    }
+
+    .add-form {
+      display: flex;
+      gap: 5px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border-hairline);
+    }
+
+    .mini-input {
+      flex: 1;
+      min-width: 0;
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--border-hairline);
+      background: var(--bg-input);
+      color: var(--text-primary);
+      border-radius: var(--radius-ctrl);
+      font-size: 11.5px;
+      outline: none;
+    }
+
+    .mini-input:focus {
+      border-color: var(--accent);
+    }
+
+    .mini-btn {
+      height: 30px;
+      padding: 0 11px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border-radius: var(--radius-ctrl);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .mini-btn:hover {
+      background: var(--bg-hover);
+    }
+
+    .center-stack {
+      width: 100%;
+      max-width: 680px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 30px;
+      margin-top: -32px;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .wordmark {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.2em;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    /* Search Bar + Icon Pill Selector (matches reference screenshot) */
+    .search-container {
+      position: relative;
+      width: 100%;
+      max-width: 610px;
+      z-index: 12;
+    }
+
+    .search-form {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 48px;
+      padding: 0 14px 0 7px;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(16px);
+      border: 1.5px solid var(--border-hairline);
+      border-radius: var(--radius-search);
+      gap: 12px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, border-radius 0.15s ease;
+    }
+
+    .search-form:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-subtle), 0 8px 28px rgba(0, 0, 0, 0.3);
+    }
+
+    .engine-pill {
+      height: 34px;
+      padding: 0 11px 0 7px;
+      border: none;
+      background: var(--pill-bg);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.14s ease, color 0.14s ease;
+    }
+
+    .engine-pill:hover, .engine-pill.open {
+      background: var(--pill-hover);
+      color: var(--text-primary);
+    }
+
+    .engine-pill-icon {
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .engine-pill-chev {
+      display: flex;
+      align-items: center;
+      transition: transform 0.16s ease;
+    }
+
+    .engine-pill.open .engine-pill-chev {
+      transform: rotate(180deg);
+    }
+
+    .engine-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      min-width: 215px;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-ctrl);
+      padding: 5px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.52);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 30;
+    }
+
+    .engine-dropdown.open {
+      display: flex;
+      animation: popIn 0.12s cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    .engine-option {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: none;
+      border-radius: calc(var(--radius-ctrl) - 1px);
+      background: transparent;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s ease;
+    }
+
+    .engine-option:hover {
+      background: var(--bg-hover);
+    }
+
+    .engine-option.active {
+      background: var(--accent-subtle);
+    }
+
+    .engine-option-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .engine-option-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .search-input {
+      flex: 1;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      min-width: 0;
+    }
+
+    .search-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* Shortcuts Grid with Real Favicons & Crisp Brand Icons */
+    .shortcuts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+      gap: 14px;
+      width: 100%;
+    }
+
+    .tile-wrap {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tile {
+      width: 72px;
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-elevated);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-tile);
+      color: var(--text-primary);
+      text-decoration: none;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+      transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s cubic-bezier(0.2, 0, 0, 1), border-radius 0.15s ease;
+    }
+
+    .tile:hover {
+      border-color: var(--accent);
+      background: var(--bg-hover);
+      transform: translateY(-2px);
+    }
+
+    .tile:active {
+      transform: scale(0.96);
+    }
+
+    .tile-favicon-img {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      border-radius: 6px;
+      display: block;
+    }
+
+    .tile-monogram {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--pill-bg);
+      color: var(--text-primary);
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-transform: uppercase;
+    }
+
+    .tile-del {
+      position: absolute;
+      top: -5px;
+      right: 9px;
+      width: 20px;
+      height: 20px;
+      border: 1px solid var(--border-strong);
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 1;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 3;
+    }
+
+    .tile-wrap:hover .tile-del {
+      display: flex;
+    }
+
+    .tile-del:hover {
+      color: #ffffff;
+      background: var(--danger);
+      border-color: var(--danger);
+    }
+
+    .tile-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-align: center;
+      max-width: 96px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    }
+
+    [data-theme="light"] .tile-label {
+      text-shadow: none;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 8px 14px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-ctrl);
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      color: var(--text-primary);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+      z-index: 40;
+    }
+
+    .toast.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="wallpaper-bg" id="wallpaperBg"></div>
+  <div class="import-banner" id="sessionBanner" style="display: none;">
+    <span id="sessionBannerText">Предыдущая сессия: найдены вкладки. Восстановить?</span>
+    <button class="btn-action" id="restoreSessionBtn">Восстановить вкладки</button>
+    <button class="btn-dismiss" id="dismissSessionBtn">✕</button>
+  </div>
+  <div class="import-banner" id="importBanner" style="display: none;">
+    <span id="importBannerText">Найдены закладки в стороннем браузере. Импортировать?</span>
+    <button class="btn-action" id="importNowBtn">Импортировать в 1 клик</button>
+    <a href="ferro://settings" class="btn-dismiss" style="text-decoration:none;">Настроить</a>
+    <button class="btn-dismiss" id="importDismissBtn">✕</button>
+  </div>
+  <main class="page" id="page" data-theme="dark">
+    <button class="gear-btn" id="gearBtn" title="Настройки новой вкладки">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
+
+    <div class="settings-popover" id="settingsPopover">
+      <div class="popover-head">
+        <span>Новая вкладка</span>
+        <span class="kbd">Ferro</span>
+      </div>
+      <a href="ferro://settings" class="menu-row" style="text-decoration:none;color:inherit;">
+        <span>Все настройки браузера</span>
+        <span class="kbd">Открыть</span>
+      </a>
+      <button class="menu-row" id="toggleShortcutsBtn">
+        <span>Ярлыки сайтов</span>
+        <span class="kbd" id="shortcutsState">Вкл</span>
+      </button>
+      <button class="menu-row" id="resetBtn">
+        <span>Сбросить ярлыки по умолчанию</span>
+        <span class="kbd">Сброс</span>
+      </button>
+      <form class="add-form" id="addShortcutForm">
+        <input class="mini-input" id="scTitle" placeholder="Название" required />
+        <input class="mini-input" id="scUrl" placeholder="site.com" required />
+        <button class="mini-btn" type="submit" title="Добавить ярлык">+</button>
+      </form>
+    </div>
+
+    <div class="center-stack">
+      <div class="brand">
+        <svg width="48" height="48" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="miter">
+          <polygon points="10,10 38.2,30.3 61.6,30.3 90,10 80.1,63.1 50,90 19.8,63.1"></polygon>
+          <polygon points="38.2,30.3 61.6,30.3 50,63.8"></polygon>
+        </svg>
+        <span class="wordmark">FERRO</span>
+      </div>
+
+      <div class="search-container" id="searchContainer">
+        <form class="search-form" id="searchForm">
+          <button type="button" class="engine-pill" id="engineBtn" title="Выбрать поисковую систему">
+            <span class="engine-pill-icon" id="enginePillIcon"></span>
+            <span class="engine-pill-chev">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </span>
+          </button>
+          <input class="search-input" id="searchInput" type="text" placeholder="Найти в Google или ввести адрес" autocomplete="off" autofocus />
+        </form>
+        <div class="engine-dropdown" id="engineDropdown"></div>
+      </div>
+
+      <div class="shortcuts-grid" id="shortcutsGrid"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </main>
+
+  <script>
+    const ENGINES = [
+      {
+        id: 'google',
+        name: 'Google',
+        url: 'https://www.google.com/search?q=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#ffffff"/><path fill="#4285F4" d="M19.6 12.2c0-.6-.1-1.1-.2-1.6H12v3.1h4.3c-.2 1-.8 1.8-1.6 2.4v2h2.6c1.5-1.4 2.3-3.4 2.3-5.9z"/><path fill="#34A853" d="M12 20c2.2 0 4-.7 5.3-1.9l-2.6-2c-.7.5-1.6.8-2.7.8-2.1 0-3.9-1.4-4.5-3.3H4.8v2.1C6.1 18.3 8.8 20 12 20z"/><path fill="#FBBC05" d="M7.5 13.6c-.2-.5-.3-1-.3-1.6s.1-1.1.3-1.6V8.3H4.8C4.3 9.4 4 10.7 4 12s.3 2.6.8 3.7l2.7-2.1z"/><path fill="#EA4335" d="M12 7.1c1.2 0 2.3.4 3.1 1.2l2.3-2.3C16 4.7 14.2 4 12 4 8.8 4 6.1 5.7 4.8 8.3l2.7 2.1c.6-1.9 2.4-3.3 4.5-3.3z"/></svg>`
+      },
+      {
+        id: 'duckduckgo',
+        name: 'DuckDuckGo',
+        url: 'https://duckduckgo.com/?q=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#DE5833"/><path fill="#ffffff" d="M9.5 7.2c-1.8 0-3 1.4-3 3.4 0 2.5 1.5 5.4 3.7 6.8h4.2c.6-1.4.8-3-.1-4.3-.4-.6-1-.9-1.6-1.1.8-.3 2.5-.5 2.8-1.3.3-.7-.8-1.2-1.9-1.3-.3-1.3-1.9-2.2-4.1-2.2z"/><circle cx="10.8" cy="9.6" r="0.85" fill="#18181b"/></svg>`
+      },
+      {
+        id: 'yandex',
+        name: 'Яндекс',
+        url: 'https://ya.ru/search/?text=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#FC3F1D"/><path fill="#ffffff" d="M13.6 18h2.1V6h-3.1c-2.6 0-4.2 1.4-4.2 3.6 0 1.7.8 2.8 2.3 3.4L8.1 18h2.3l2.3-4.6h.9V18zm0-6.2h-.8c-1.3 0-2.1-.7-2.1-2.1 0-1.4.8-2.1 2.1-2.1h.8v4.2z"/></svg>`
+      },
+      {
+        id: 'bing',
+        name: 'Bing',
+        url: 'https://www.bing.com/search?q=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#00809D"/><path fill="#ffffff" d="M8 5.5v11.2l3.3 1.8 5.2-3v-3.5l-4.6-1.7-.9 2.2 2.4.9-2.1 1.2V6.7L8 5.5z"/></svg>`
+      },
+      {
+        id: 'brave',
+        name: 'Brave Search',
+        url: 'https://search.brave.com/search?q=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#FB542B"/><path fill="#ffffff" d="M7.5 7l1.8-1.5h5.4L16.5 7l-.7 6.8L12 18.5l-3.8-4.7L7.5 7zm2.8 2.5l1.7 2.2 1.7-2.2H10.3z"/></svg>`
+      },
+      {
+        id: 'youtube',
+        name: 'YouTube',
+        url: 'https://www.youtube.com/results?search_query=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><rect x="1.5" y="4.5" width="21" height="15" rx="4.5" fill="#FF0000"/><polygon points="10 8.5 16 12 10 15.5" fill="#ffffff"/></svg>`
+      },
+      {
+        id: 'github',
+        name: 'GitHub',
+        url: 'https://github.com/search?q=',
+        svg: (sz) => `<svg width="${sz}" height="${sz}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11.5" fill="#24292f"/><path fill="#ffffff" d="M12 5.3a6.8 6.8 0 0 0-2.1 13.3c.3.1.5-.1.5-.3v-1.2c-1.9.4-2.3-.9-2.3-.9-.3-.8-.8-1-.8-1-.6-.4.1-.4.1-.4.7.1 1.1.7 1.1.7.6 1.1 1.6.8 2 .6.1-.5.3-.8.5-1-1.5-.2-3.1-.8-3.1-3.4 0-.8.3-1.4.7-1.9-.1-.2-.3-.9.1-1.9 0 0 .6-.2 1.9.7a6.5 6.5 0 0 1 3.4 0c1.3-.9 1.9-.7 1.9-.7.4 1 .2 1.7.1 1.9.4.5.7 1.1.7 1.9 0 2.6-1.6 3.2-3.1 3.4.3.2.5.7.5 1.4v2c0 .2.1.4.5.3A6.8 6.8 0 0 0 12 5.3z"/></svg>`
+      }
+    ];
+
+    const DEFAULT_SHORTCUTS = [
+      { id: 1, title: 'Google', url: 'https://www.google.com' },
+      { id: 2, title: 'YouTube', url: 'https://www.youtube.com' },
+      { id: 3, title: 'История', url: 'ferro://history' },
+      { id: 4, title: 'Пароли', url: 'ferro://passwords' },
+      { id: 5, title: 'Google Аккаунт', url: 'https://myaccount.google.com' },
+      { id: 6, title: 'GitHub', url: 'https://github.com' },
+      { id: 7, title: 'Reddit', url: 'https://www.reddit.com' },
+      { id: 8, title: 'Arch Wiki', url: 'https://wiki.archlinux.org' }
+    ];
+
+    function getTileIconHtml(url, title) {
+      const u = (url || '').toLowerCase();
+      const firstChar = ((title || url || 'F').replace(/^https?:\/\/(www\.)?/, '')[0] || 'F').toUpperCase();
+
+      if (u.startsWith('ferro://history')) {
+        return `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3.5 2"/></svg>`;
+      }
+      if (u.startsWith('ferro://passwords')) {
+        return `<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/><circle cx="12" cy="16.5" r="1.5" fill="currentColor"/></svg>`;
+      }
+      if (u.startsWith('ferro://')) {
+        return `<svg width="30" height="30" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6.5"><polygon points="10,10 38.2,30.3 61.6,30.3 90,10 80.1,63.1 50,90 19.8,63.1"/><polygon points="38.2,30.3 61.6,30.3 50,63.8"/></svg>`;
+      }
+      if (u.includes('myaccount.google.com') || u.includes('accounts.google.com')) {
+        return `<svg width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#1a73e8"/><circle cx="12" cy="9.2" r="3.4" fill="#ffffff"/><path d="M6.2 18.6c1.2-2.6 3.3-3.9 5.8-3.9s4.6 1.3 5.8 3.9a9.2 9.2 0 0 1-11.6 0z" fill="#ffffff"/></svg>`;
+      }
+      if (u.includes('google.')) {
+        return ENGINES[0].svg(34);
+      }
+      if (u.includes('youtube.com') || u.includes('youtu.be')) {
+        return `<svg width="36" height="36" viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="5" fill="#FF0000"/><polygon points="9.8 8.3 16.5 12 9.8 15.7" fill="#ffffff"/></svg>`;
+      }
+      if (u.includes('github.com')) {
+        return `<svg width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#24292f"/><path fill="#ffffff" d="M12 4.8a7.3 7.3 0 0 0-2.3 14.2c.4.1.5-.2.5-.4v-1.4c-2 .4-2.5-.9-2.5-.9-.3-.8-.8-1.1-.8-1.1-.7-.4.1-.4.1-.4.7.1 1.1.7 1.1.7.6 1.1 1.7.8 2.1.6.1-.5.3-.8.5-1-1.6-.2-3.3-.8-3.3-3.6 0-.8.3-1.5.8-2-.1-.2-.3-.9.1-2 0 0 .6-.2 2 .8a7 7 0 0 1 3.6 0c1.4-1 2-.8 2-.8.4 1.1.2 1.8.1 2 .5.5.8 1.2.8 2 0 2.8-1.7 3.4-3.3 3.6.3.2.5.7.5 1.5v2.2c0 .2.1.5.5.4A7.3 7.3 0 0 0 12 4.8z"/></svg>`;
+      }
+      if (u.includes('reddit.com')) {
+        return `<svg width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#FF4500"/><circle cx="12" cy="13.5" r="5.6" fill="#ffffff"/><circle cx="9.8" cy="13" r="1.05" fill="#FF4500"/><circle cx="14.2" cy="13" r="1.05" fill="#FF4500"/><path d="M9.5 15.6c1.3 1 3.7 1 5 0" stroke="#FF4500" stroke-width="1.3" fill="none" stroke-linecap="round"/><path d="M12 7.9l1.4-3.1 2.9.6" stroke="#ffffff" stroke-width="1.4" fill="none" stroke-linecap="round"/><circle cx="17.4" cy="5.7" r="1.25" fill="#ffffff"/></svg>`;
+      }
+      if (u.includes('archlinux.org')) {
+        return `<svg width="34" height="34" viewBox="0 0 24 24"><path fill="#1793D1" d="M12 2c-.9 2.2-1.4 3.6-2.5 5.8.6.7 1.4 1.4 2.6 2.3-1.3-.5-2.2-1.1-2.9-1.7C7.9 11.1 5.9 15 2 22c3.1-1.8 5.5-2.9 7.8-3.3-.1-.5-.2-1-.2-1.6 0-2 1.1-3.6 2.4-3.6s2.4 1.6 2.4 3.6c0 .6-.1 1.1-.2 1.6 2.3.4 4.7 1.5 7.8 3.3-.6-1.1-1.2-2.2-1.7-3.2-.8-.7-1.7-1.5-3.5-2.4 1.2.3 2.1.7 2.8 1.1C16.2 11.2 15.3 9.2 12 2z"/></svg>`;
+      }
+      if (u.includes('duckduckgo.com')) return ENGINES[1].svg(34);
+      if (u.includes('yandex.') || u.includes('ya.ru')) return ENGINES[2].svg(34);
+      if (u.includes('bing.com')) return ENGINES[3].svg(34);
+      if (u.includes('brave.com')) return ENGINES[4].svg(34);
+
+      try {
+        const host = new URL(url).hostname;
+        if (host) {
+          const fav1 = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+          const fav2 = `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`;
+          const safeChar = firstChar.replace(/["'<>]/g, '');
+          return `<img class="tile-favicon-img" src="${fav1}" alt="" onerror="if(!this.dataset.fb){this.dataset.fb='1';this.src='${fav2}';}else{this.outerHTML='<span class=\\'tile-monogram\\'>${safeChar}</span>';}" />`;
+        }
+      } catch (e) {}
+
+      return `<span class="tile-monogram">${firstChar}</span>`;
+    }
+
+    function loadSaved(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
+
+    function saveVal(key, val) {
+      try {
+        localStorage.setItem(key, JSON.stringify(val));
+      } catch (e) {}
+    }
+
+    // Migrate old GitHub search shortcut if present
+    let initialShortcuts = loadSaved('ferro_ntp_shortcuts', DEFAULT_SHORTCUTS.slice());
+    if (Array.isArray(initialShortcuts)) {
+      initialShortcuts = initialShortcuts.map(sc => {
+        if (sc && sc.url === 'https://github.com/search?q=') {
+          return Object.assign({}, sc, { url: 'https://github.com' });
+        }
+        return sc;
+      });
+    }
+
+    const state = {
+      theme: 'dark',
+      engineId: loadSaved('ferro_ntp_engine_id', 'google'),
+      engineDropdownOpen: false,
+      showShortcuts: loadSaved('ferro_ntp_show_sc', true),
+      shortcuts: initialShortcuts,
+      settingsOpen: false,
+      browserSettings: null
+    };
+
+    const page = document.getElementById('page');
+    const gearBtn = document.getElementById('gearBtn');
+    const settingsPopover = document.getElementById('settingsPopover');
+    const engineBtn = document.getElementById('engineBtn');
+    const enginePillIcon = document.getElementById('enginePillIcon');
+    const engineDropdown = document.getElementById('engineDropdown');
+    const searchInput = document.getElementById('searchInput');
+    const shortcutsGrid = document.getElementById('shortcutsGrid');
+    const toast = document.getElementById('toast');
+
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    function getEngine() {
+      return ENGINES.find(e => e.id === state.engineId) || ENGINES[0];
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderEngineSelector() {
+      const eng = getEngine();
+      enginePillIcon.innerHTML = eng.svg(22);
+      searchInput.placeholder = `Найти в ${eng.name} или ввести адрес`;
+      engineBtn.classList.toggle('open', state.engineDropdownOpen);
+      engineDropdown.classList.toggle('open', state.engineDropdownOpen);
+
+      engineDropdown.innerHTML = '';
+      ENGINES.forEach(item => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isActive = item.id === eng.id;
+        btn.className = 'engine-option' + (isActive ? ' active' : '');
+        btn.innerHTML = `
+          <span class="engine-option-left">
+            <span class="engine-option-icon">${item.svg(20)}</span>
+            <span>${item.name}</span>
+          </span>
+          ${isActive ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"></polyline></svg>` : ''}
+        `;
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          state.engineId = item.id;
+          state.engineDropdownOpen = false;
+          saveVal('ferro_ntp_engine_id', item.id);
+          renderEngineSelector();
+          searchInput.focus();
+
+          // Sync search engine to BrowserSettings so Omnibox matches
+          if (state.browserSettings) {
+            state.browserSettings.search_engine = item.id;
+            if (window.ipc) {
+              window.ipc.postMessage(JSON.stringify({
+                action: 'save_settings',
+                settings: state.browserSettings
+              }));
+            }
+            fetch('ferro://api/settings/save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(state.browserSettings)
+            }).catch(() => {});
+          }
+        });
+        engineDropdown.appendChild(btn);
+      });
+    }
+
+    function render() {
+      page.setAttribute('data-theme', state.theme);
+      document.documentElement.setAttribute('data-theme', state.theme);
+      settingsPopover.classList.toggle('open', state.settingsOpen);
+      document.getElementById('shortcutsState').textContent = state.showShortcuts ? 'Вкл' : 'Выкл';
+
+      renderEngineSelector();
+
+      shortcutsGrid.style.display = state.showShortcuts ? 'grid' : 'none';
+      shortcutsGrid.innerHTML = '';
+
+      if (state.showShortcuts) {
+        state.shortcuts.forEach(item => {
+          const wrap = document.createElement('div');
+          wrap.className = 'tile-wrap';
+          const iconHtml = getTileIconHtml(item.url, item.title);
+          wrap.innerHTML = `
+            <a class="tile" href="${escapeHtml(item.url)}" title="${escapeHtml(item.url)}">
+              ${iconHtml}
+            </a>
+            <button class="tile-del" title="Удалить ярлык">×</button>
+            <span class="tile-label">${escapeHtml(item.title)}</span>
+          `;
+          wrap.querySelector('.tile-del').addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            state.shortcuts = state.shortcuts.filter(s => s.id !== item.id);
+            saveVal('ferro_ntp_shortcuts', state.shortcuts);
+            render();
+          });
+          shortcutsGrid.appendChild(wrap);
+        });
+      }
+    }
+
+    engineBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.engineDropdownOpen = !state.engineDropdownOpen;
+      renderEngineSelector();
+    });
+
+    document.getElementById('searchForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const q = searchInput.value.trim();
+      if (!q) return;
+      const eng = getEngine();
+      let target = q;
+      if (!q.startsWith('http://') && !q.startsWith('https://') && !q.startsWith('ferro://')) {
+        const isDomain = /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(\/.*)?$/.test(q);
+        target = isDomain ? ('https://' + q) : (eng.url + encodeURIComponent(q));
+      }
+      window.location.href = target;
+    });
+
+    gearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.settingsOpen = !state.settingsOpen;
+      render();
+    });
+
+    document.getElementById('toggleShortcutsBtn').addEventListener('click', () => {
+      state.showShortcuts = !state.showShortcuts;
+      saveVal('ferro_ntp_show_sc', state.showShortcuts);
+      render();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+      state.shortcuts = DEFAULT_SHORTCUTS.slice();
+      saveVal('ferro_ntp_shortcuts', state.shortcuts);
+      render();
+    });
+
+    document.getElementById('addShortcutForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const title = document.getElementById('scTitle').value.trim();
+      let url = document.getElementById('scUrl').value.trim();
+      if (!title || !url) return;
+      if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('ferro://')) {
+        url = 'https://' + url;
+      }
+      state.shortcuts.push({ id: Date.now(), title, url });
+      saveVal('ferro_ntp_shortcuts', state.shortcuts);
+      document.getElementById('scTitle').value = '';
+      document.getElementById('scUrl').value = '';
+      render();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (state.settingsOpen && !settingsPopover.contains(e.target) && !gearBtn.contains(e.target)) {
+        state.settingsOpen = false;
+        settingsPopover.classList.remove('open');
+      }
+      if (state.engineDropdownOpen && !engineDropdown.contains(e.target) && !engineBtn.contains(e.target)) {
+        state.engineDropdownOpen = false;
+        renderEngineSelector();
+      }
+    });
+
+    const WALLPAPERS = {
+      forest: 'https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=80',
+      cyberpunk: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80',
+      nebula: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=1920&q=80',
+      obsidian: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1920&q=80'
+    };
+
+    const wallpaperEl = document.getElementById('wallpaperBg');
+    const importBanner = document.getElementById('importBanner');
+    const importBannerText = document.getElementById('importBannerText');
+    const importNowBtn = document.getElementById('importNowBtn');
+    const importDismissBtn = document.getElementById('importDismissBtn');
+
+    let detectedBrowserId = 'chrome';
+
+    function hexToRgba(hex, alpha) {
+      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
+      if (!m) return `rgba(236, 236, 236, ${alpha})`;
+      return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
+    }
+
+    window.applySettings = function(s) {
+      if (!s) return;
+      window._ferro_settings = s;
+      state.browserSettings = s;
+
+      const root = document.documentElement;
+      const isLight = s.theme_mode === 'light';
+      state.theme = isLight ? 'light' : 'dark';
+      root.setAttribute('data-theme', state.theme);
+      page.setAttribute('data-theme', state.theme);
+
+      if (s.search_engine && ENGINES.some(e => e.id === s.search_engine)) {
+        state.engineId = s.search_engine;
+        saveVal('ferro_ntp_engine_id', s.search_engine);
+      }
+
+      if (s.accent_color) {
+        const effectiveAcc = (isLight && s.accent_color.toLowerCase() === '#ececec') ? '#18181b' : s.accent_color;
+        root.style.setProperty('--accent', effectiveAcc);
+        root.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.22));
+      }
+
+      if (s.corner_radius !== undefined) {
+        const rad = Number(s.corner_radius);
+        root.style.setProperty('--radius-ctrl', Math.max(2, rad) + 'px');
+        root.style.setProperty('--radius-tile', (rad === 0 ? 0 : Math.max(4, Math.round(rad * 1.15))) + 'px');
+        root.style.setProperty('--radius-search', (rad >= 14 ? 999 : (rad === 0 ? 0 : Math.max(6, Math.round(rad * 1.35)))) + 'px');
+      }
+
+      // Apply wallpaper & Zen transparency
+      let bgUrl = '';
+      if (s.wallpaper_type === 'custom' && s.wallpaper_url) {
+        bgUrl = s.wallpaper_url;
+      } else if (WALLPAPERS[s.wallpaper_type]) {
+        bgUrl = WALLPAPERS[s.wallpaper_type];
+      } else if (s.wallpaper_url && s.wallpaper_type !== 'none') {
+        bgUrl = s.wallpaper_url;
+      }
+
+      const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
+
+      if (bgUrl && s.wallpaper_type !== 'none') {
+        wallpaperEl.style.backgroundImage = `url("${bgUrl}")`;
+        wallpaperEl.style.filter = `blur(${s.wallpaper_blur || 0}px) brightness(${s.wallpaper_brightness || 80}%)`;
+        wallpaperEl.classList.add('active');
+        root.style.background = 'transparent';
+        document.body.style.background = 'transparent';
+        page.style.background = 'transparent';
+      } else {
+        wallpaperEl.classList.remove('active');
+        wallpaperEl.style.backgroundImage = 'none';
+        if (alpha < 1) {
+          const baseSurf = isLight ? `rgba(244, 244, 246, ${alpha})` : `rgba(20, 20, 20, ${alpha})`;
+          root.style.background = baseSurf;
+          document.body.style.background = 'transparent';
+          page.style.background = 'transparent';
+        } else {
+          root.style.background = '';
+          document.body.style.background = '';
+          page.style.background = '';
+        }
+      }
+
+      renderEngineSelector();
+    };
+
+    fetch('ferro://api/settings/get')
+      .then(r => r.json())
+      .then(s => {
+        window.applySettings(s);
+
+        if (!s.has_prompted_import) {
+          fetch('ferro://api/import/detect')
+            .then(res => res.json())
+            .then(browsers => {
+              if (Array.isArray(browsers) && browsers.length > 0) {
+                const b = browsers[0];
+                detectedBrowserId = b.id;
+                importBannerText.textContent = `Найдены закладки (${b.bookmarks_count}) и история в ${b.name}. Импортировать?`;
+                importBanner.style.display = 'flex';
+              }
+            }).catch(() => {});
+        }
+      }).catch(() => {});
+
+    importNowBtn.addEventListener('click', () => {
+      importNowBtn.disabled = true;
+      importNowBtn.textContent = 'Импорт...';
+      fetch(`ferro://api/import/run?browser=${detectedBrowserId}`)
+        .then(r => r.json())
+        .then(res => {
+          showToast(`Импортировано: ${res.bookmarks_imported} закладок, ${res.history_imported} страниц истории`);
+          importBanner.style.display = 'none';
+          if (window.ipc) {
+            window.ipc.postMessage(JSON.stringify({ action: 'reload_bookmarks' }));
+          }
+        })
+        .catch(() => {
+          showToast('Ошибка при импорте данных');
+          importBanner.style.display = 'none';
+        });
+    });
+
+    importDismissBtn.addEventListener('click', () => {
+      importBanner.style.display = 'none';
+      fetch('ferro://api/import/dismiss').catch(() => {});
+    });
+
+    fetch('ferro://api/session/detect')
+      .then(r => r.json())
+      .then(res => {
+        if (res.has_session && res.tabs_count > 0) {
+          const sessionBanner = document.getElementById('sessionBanner');
+          document.getElementById('sessionBannerText').textContent = `Восстановить предыдущую сессию? Закрыто ${res.tabs_count} вкладок.`;
+          sessionBanner.style.display = 'flex';
+        }
+      }).catch(() => {});
+
+    document.getElementById('restoreSessionBtn').addEventListener('click', () => {
+      document.getElementById('sessionBanner').style.display = 'none';
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'restore_session' }));
+      }
+    });
+
+    document.getElementById('dismissSessionBtn').addEventListener('click', () => {
+      document.getElementById('sessionBanner').style.display = 'none';
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'dismiss_session' }));
+      } else {
+        fetch('ferro://api/session/dismiss').catch(() => {});
+      }
+    });
+
+    render();
+  </script>
+</body>
+</html>

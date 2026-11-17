@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>Настройки — Ferro</title>
+  <style>
+    :root {
+      --bg-base: #111111;
+      --bg-surface: #141414;
+      --bg-card: #1c1c1c;
+      --bg-input: #121212;
+      --bg-hover: #222222;
+      --accent: #ececec;
+      --accent-subtle: rgba(236, 236, 236, 0.12);
+      --text-primary: #ececec;
+      --text-secondary: #9c9c9c;
+      --text-muted: #686868;
+      --border-hairline: #242424;
+      --border-strong: #333333;
+      --radius-tab: 2px;
+      --radius-ctrl: 3px;
+      --radius-card: 4px;
+      --font-ui: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    [data-theme="light"] {
+      --bg-base: #f5f5f5;
+      --bg-surface: #ffffff;
+      --bg-card: #fafafa;
+      --bg-input: #ffffff;
+      --bg-hover: #eeeeee;
+      --accent: #141414;
+      --accent-subtle: rgba(20, 20, 20, 0.08);
+      --text-primary: #141414;
+      --text-secondary: #555555;
+      --text-muted: #888888;
+      --border-hairline: #e0e0e0;
+      --border-strong: #cccccc;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: 230px;
+      border-right: 1px solid var(--border-hairline);
+      background: var(--bg-surface);
+      padding: 24px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      user-select: none;
+    }
+
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px 18px;
+      border-bottom: 1px solid var(--border-hairline);
+      margin-bottom: 12px;
+    }
+
+    .brand-title {
+      font-weight: 600;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: var(--radius-ctrl);
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+
+    .nav-item:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: var(--accent-subtle);
+      border-color: var(--border-strong);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .nav-icon {
+      font-size: 14px;
+      width: 18px;
+      text-align: center;
+      opacity: 0.85;
+    }
+
+    /* Main Content Area */
+    .content {
+      margin-left: 230px;
+      flex: 1;
+      padding: 36px 44px;
+      max-width: 860px;
+    }
+
+    .section {
+      display: none;
+    }
+    .section.active {
+      display: block;
+      animation: fadeIn 0.15s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      letter-spacing: -0.01em;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-card);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-primary);
+    }
+
+    .card-desc {
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-bottom: 14px;
+    }
+
+    /* Controls: Row items */
+    .row-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border-hairline);
+    }
+    .row-item:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    .row-item:first-child {
+      padding-top: 0;
+    }
+
+    .row-label {
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .row-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Segmented Button Group */
+    .segmented {
+      display: inline-flex;
+      background: var(--bg-card);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .seg-btn {
+      padding: 5px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: var(--radius-ctrl);
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+
+    .seg-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .seg-btn.active {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+      font-weight: 600;
+    }
+
+    /* Color Swatches (Material You) */
+    .color-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+      align-items: center;
+    }
+
+    .color-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-ctrl);
+      cursor: pointer;
+      border: 2px solid transparent;
+      position: relative;
+      transition: transform 0.12s ease, border-color 0.12s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .color-swatch:hover {
+      transform: scale(1.08);
+    }
+
+    .color-swatch.active {
+      border-color: #ffffff;
+      box-shadow: 0 0 0 1px #000000;
+    }
+
+    .color-swatch.active::after {
+      content: '✓';
+      color: #000000;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .color-swatch.dark-check.active::after {
+      color: #ffffff;
+    }
+
+    .custom-color-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 8px;
+    }
+
+    .color-picker-input {
+      -webkit-appearance: none;
+      border: 1px solid var(--border-hairline);
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-ctrl);
+      cursor: pointer;
+      background: transparent;
+      padding: 0;
+    }
+    .color-picker-input::-webkit-color-swatch-wrapper { padding: 0; }
+    .color-picker-input::-webkit-color-swatch { border: none; border-radius: var(--radius-ctrl); }
+
+    .hex-input {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-hairline);
+      color: var(--text-primary);
+      padding: 5px 8px;
+      border-radius: var(--radius-ctrl);
+      width: 82px;
+      outline: none;
+    }
+    .hex-input:focus {
+      border-color: var(--border-strong);
+    }
+
+    /* Sliders */
+    .slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-top: 10px;
+    }
+
+    .slider {
+      flex: 1;
+      height: 4px;
+      -webkit-appearance: none;
+      background: linear-gradient(to right, var(--accent, #ececec) 0%, var(--accent, #ececec) var(--p, 0%), var(--border-strong, #242424) var(--p, 0%), var(--border-strong, #242424) 100%);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent, #ececec);
+      border: 2px solid #141414;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    }
+
+    .slider-val {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+      min-width: 44px;
+      text-align: right;
+    }
+
+    /* Wallpapers Grid */
+    .wp-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .wp-card {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+      cursor: pointer;
+      background: var(--bg-card);
+      transition: border-color 0.12s ease, transform 0.12s ease;
+      position: relative;
+    }
+
+    .wp-card:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-2px);
+    }
+
+    .wp-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .wp-thumb {
+      height: 74px;
+      background-size: cover;
+      background-position: center;
+      background-color: #111111;
+    }
+
+    .wp-title {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 6px 8px;
+      text-align: center;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .wp-card.active .wp-title {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    /* Theme Cards for Top Panel */
+    .topbar-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .topbar-card {
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+      cursor: pointer;
+      background: var(--bg-card);
+      transition: border-color 0.12s ease;
+    }
+
+    .topbar-card:hover {
+      border-color: var(--border-strong);
+    }
+
+    .topbar-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+
+    .topbar-preview {
+      height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 6px;
+    }
+
+    .topbar-preview .mock-tab {
+      height: 22px;
+      width: 50px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 2px 2px 0 0;
+    }
+
+    .topbar-name {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 6px 8px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+    .topbar-card.active .topbar-name {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    /* Browser Importer List */
+    .browser-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .browser-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+    }
+
+    .browser-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .browser-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-ctrl);
+      background: var(--bg-hover);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+      font-family: var(--font-mono);
+    }
+
+    .action-btn {
+      padding: 6px 14px;
+      background: var(--text-primary);
+      color: var(--bg-base);
+      border: none;
+      border-radius: var(--radius-ctrl);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.12s ease;
+    }
+    .action-btn:hover {
+      opacity: 0.9;
+    }
+
+    .secondary-btn {
+      padding: 5px 12px;
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--border-hairline);
+      border-radius: var(--radius-ctrl);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .secondary-btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+    }
+
+    /* Shortcuts Table */
+    .shortcuts-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+
+    .shortcuts-table tr {
+      border-bottom: 1px solid var(--border-hairline);
+    }
+    .shortcuts-table tr:last-child {
+      border-bottom: none;
+    }
+
+    .shortcuts-table td {
+      padding: 10px 6px;
+      font-size: 13px;
+    }
+
+    .kbd-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: 3px;
+      padding: 3px 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-primary);
+      box-shadow: 0 1px 0 rgba(0,0,0,0.3);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 9px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-ctrl);
+      color: var(--text-primary);
+      font-size: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.15s ease, transform 0.15s ease;
+      pointer-events: none;
+      z-index: 100;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <svg width="22" height="22" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="miter">
+        <polygon points="10,10 38.2,30.3 61.6,30.3 90,10 80.1,63.1 50,90 19.8,63.1"></polygon>
+        <polygon points="38.2,30.3 61.6,30.3 50,63.8"></polygon>
+      </svg>
+      <span class="brand-title">Настройки Ferro</span>
+    </div>
+
+    <button class="nav-item active" data-tab="appearance">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20v-20z"/></svg></span>
+      <span>Внешний вид</span>
+    </button>
+    <button class="nav-item" data-tab="tabs_session">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
+      <span>Вкладки и сессии</span>
+    </button>
+    <button class="nav-item" data-tab="wallpaper">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
+      <span>Обои новой вкладки</span>
+    </button>
+    <button class="nav-item" data-tab="topbar">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></span>
+      <span>Верхняя панель</span>
+    </button>
+    <button class="nav-item" data-tab="import">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+      <span>Импорт данных</span>
+    </button>
+    <button class="nav-item" data-tab="hotkeys">
+      <span class="nav-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="7" y1="16" x2="17" y2="16"/></svg></span>
+      <span>Горячие клавиши</span>
+    </button>
+  </aside>
+
+  <!-- Content -->
+  <main class="content">
+
+    <!-- 1. Внешний вид -->
+    <section class="section active" id="sec-appearance">
+      <h1 class="section-title">Внешний вид</h1>
+      <p class="section-desc">Цветовая палитра, радиус скруглений и прозрачность интерфейса.</p>
+
+      <div class="card">
+        <h3 class="card-title">Тема оформления</h3>
+        <p class="card-desc">Базовый режим интерфейса браузера.</p>
+        <div class="segmented">
+          <button class="seg-btn active" id="btnThemeDark">Темная (Obsidian)</button>
+          <button class="seg-btn" id="btnThemeLight">Светлая</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Акцентный цвет (Material You)</h3>
+        <p class="card-desc">Цвет активных элементов, рамок ввода и индикаторов.</p>
+        <div class="color-grid">
+          <div class="color-swatch active" data-color="#ececec" style="background:#ececec;" title="Obsidian Monochrome"></div>
+          <div class="color-swatch dark-check" data-color="#3b82f6" style="background:#3b82f6;" title="Sapphire Blue"></div>
+          <div class="color-swatch dark-check" data-color="#10b981" style="background:#10b981;" title="Emerald Green"></div>
+          <div class="color-swatch dark-check" data-color="#8b5cf6" style="background:#8b5cf6;" title="Amethyst Purple"></div>
+          <div class="color-swatch dark-check" data-color="#f59e0b" style="background:#f59e0b;" title="Amber Gold"></div>
+          <div class="color-swatch dark-check" data-color="#ef4444" style="background:#ef4444;" title="Crimson Red"></div>
+          <div class="color-swatch dark-check" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></div>
+
+          <div class="custom-color-wrap">
+            <input type="color" class="color-picker-input" id="customColorPicker" value="#ececec" title="Выбрать свой цвет" />
+            <input type="text" class="hex-input" id="customColorHex" value="#ececec" maxlength="7" spellcheck="false" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Скругление углов</h3>
+        <p class="card-desc">Радиус скругления для вкладок, кнопок, омнибокса и диалогов.</p>
+        <div class="segmented" style="margin-bottom: 8px;">
+          <button class="seg-btn" data-rad="0">0px (Strict Sharp)</button>
+          <button class="seg-btn active" data-rad="2">2px (Obsidian)</button>
+          <button class="seg-btn" data-rad="6">6px (Compact)</button>
+          <button class="seg-btn" data-rad="12">12px (Smooth)</button>
+          <button class="seg-btn" data-rad="18">18px (Round)</button>
+        </div>
+        <div class="slider-wrap">
+          <input type="range" class="slider" id="radiusSlider" min="0" max="20" step="1" value="2" />
+          <span class="slider-val" id="radiusVal">2px</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Прозрачность и размытие (Zen Glass)</h3>
+        <p class="card-desc">Эффект матового стекла для панелей браузера с аппаратным размытием.</p>
+        <div class="slider-wrap">
+          <input type="range" class="slider" id="transparencySlider" min="0" max="50" step="5" value="15" />
+          <span class="slider-val" id="transparencyVal">15%</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Вкладки и сессии -->
+    <section class="section" id="sec-tabs_session">
+      <h1 class="section-title">Вкладки и сессии</h1>
+      <p class="section-desc">Настройки сохранения и восстановления сессий при перезапуске браузера.</p>
+
+      <div class="card">
+        <h3 class="card-title">Восстановление сессии при запуске</h3>
+        <p class="card-desc">Как браузер поступает с вкладками после закрытия программы.</p>
+        <div class="segmented">
+          <button class="seg-btn active" data-session="prompt">Предлагать восстановление</button>
+          <button class="seg-btn" data-session="always">Восстанавливать автоматически</button>
+          <button class="seg-btn" data-session="never">Всегда открывать новую вкладку</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Горячая клавиша восстановления</h3>
+        <p class="card-desc">Сочетание клавиш <span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">Shift</span> + <span class="kbd-badge">T</span> мгновенно возвращает последнюю закрытую вкладку из стека (до 50 последних вкладок), включая предыдущие сессии.</p>
+      </div>
+    </section>
+
+    <!-- 3. Обои новой вкладки -->
+    <section class="section" id="sec-wallpaper">
+      <h1 class="section-title">Обои новой вкладки</h1>
+      <p class="section-desc">Настройка фонового изображения для домашней страницы `ferro://newtab`.</p>
+
+      <div class="card">
+        <h3 class="card-title">Коллекция фонов</h3>
+        <div class="wp-grid">
+          <div class="wp-card active" data-wp="none">
+            <div class="wp-thumb" style="background:#111111; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:12px; font-weight:600;">OFF</div>
+            <div class="wp-title">Без фона</div>
+          </div>
+          <div class="wp-card" data-wp="forest" data-url="https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=80">
+            <div class="wp-thumb" style="background-image:url('https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="wp-title">Нордический лес</div>
+          </div>
+          <div class="wp-card" data-wp="cyberpunk" data-url="https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80">
+            <div class="wp-thumb" style="background-image:url('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="wp-title">Киберпанк</div>
+          </div>
+          <div class="wp-card" data-wp="nebula" data-url="https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=1920&q=80">
+            <div class="wp-thumb" style="background-image:url('https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="wp-title">Глубокий космос</div>
+          </div>
+          <div class="wp-card" data-wp="obsidian" data-url="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1920&q=80">
+            <div class="wp-thumb" style="background-image:url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="wp-title">Обсидиановые волны</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Своё изображение</h3>
+        <p class="card-desc">Укажите прямую ссылку на картинку или выберите файл с диска.</p>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <input type="text" id="customWpUrl" class="hex-input" style="flex:1; width:auto;" placeholder="https://site.com/wallpaper.jpg" />
+          <button class="secondary-btn" id="btnApplyCustomWp">Применить URL</button>
+        </div>
+        <div>
+          <input type="file" id="wpFileInput" accept="image/*" style="display:none;" />
+          <button class="secondary-btn" onclick="document.getElementById('wpFileInput').click()">Загрузить файл с компьютера</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Эффекты фона</h3>
+        <div class="row-item">
+          <div>
+            <div class="row-label">Размытие (Blur)</div>
+            <div class="row-sub">Смягчает контраст картинки для удобства чтения текста.</div>
+          </div>
+          <div class="slider-wrap" style="width:260px; margin:0;">
+            <input type="range" class="slider" id="wpBlurSlider" min="0" max="25" step="1" value="0" />
+            <span class="slider-val" id="wpBlurVal">0px</span>
+          </div>
+        </div>
+        <div class="row-item">
+          <div>
+            <div class="row-label">Яркость (Brightness)</div>
+            <div class="row-sub">Затемнение обоев под общий тёмный стиль браузера.</div>
+          </div>
+          <div class="slider-wrap" style="width:260px; margin:0;">
+            <input type="range" class="slider" id="wpBrightSlider" min="20" max="100" step="5" value="80" />
+            <span class="slider-val" id="wpBrightVal">80%</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Верхняя панель -->
+    <section class="section" id="sec-topbar">
+      <h1 class="section-title">Верхняя панель</h1>
+      <p class="section-desc">Оформление шапки браузера в стиле тем Firefox.</p>
+
+      <div class="card">
+        <h3 class="card-title">Темы верхней панели</h3>
+        <div class="topbar-grid">
+          <div class="topbar-card active" data-topbar="default">
+            <div class="topbar-preview" style="background:#1c1c1c;">
+              <div class="mock-tab"></div>
+            </div>
+            <div class="topbar-name">Монохром (Obsidian)</div>
+          </div>
+          <div class="topbar-card" data-topbar="carbon">
+            <div class="topbar-preview" style="background:linear-gradient(90deg, #18181b, #27272a);">
+              <div class="mock-tab"></div>
+            </div>
+            <div class="topbar-name">Карбон (Carbon Dark)</div>
+          </div>
+          <div class="topbar-card" data-topbar="aurora">
+            <div class="topbar-preview" style="background:linear-gradient(135deg, #09203f, #1e3a8a, #065f46);">
+              <div class="mock-tab"></div>
+            </div>
+            <div class="topbar-name">Северное сияние</div>
+          </div>
+          <div class="topbar-card" data-topbar="sunset">
+            <div class="topbar-preview" style="background:linear-gradient(135deg, #2a0845, #6441a5, #f59e0b);">
+              <div class="mock-tab"></div>
+            </div>
+            <div class="topbar-name">Закат (Sunset Glow)</div>
+          </div>
+          <div class="topbar-card" data-topbar="neon">
+            <div class="topbar-preview" style="background:linear-gradient(135deg, #050505, #1f0b24, #0a192f);">
+              <div class="mock-tab"></div>
+            </div>
+            <div class="topbar-name">Кибернеон</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Импорт данных -->
+    <section class="section" id="sec-import">
+      <h1 class="section-title">Импорт данных</h1>
+      <p class="section-desc">Автоматический перенос закладок и истории просмотров из других браузеров на вашем компьютере.</p>
+
+      <div class="card">
+        <h3 class="card-title">Обнаруженные браузеры</h3>
+        <p class="card-desc">Все данные переносятся локально без выхода в сеть.</p>
+        <div class="browser-list" id="browserList">
+          <div style="color:var(--text-muted); font-size:12px;">Поиск установленных браузеров...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Горячие клавиши -->
+    <section class="section" id="sec-hotkeys">
+      <h1 class="section-title">Горячие клавиши</h1>
+      <p class="section-desc">Полный список поддерживаемых сочетаний клавиш. Поддерживаются английская и русская раскладки клавиатуры.</p>
+
+      <div class="card" style="padding: 10px 18px;">
+        <table class="shortcuts-table">
+          <tr>
+            <td>Восстановить закрытую вкладку</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">Shift</span> + <span class="kbd-badge">T</span></td>
+          </tr>
+          <tr>
+            <td>Новая вкладка</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">T</span></td>
+          </tr>
+          <tr>
+            <td>Закрыть текущую вкладку</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">W</span></td>
+          </tr>
+          <tr>
+            <td>Следующая / предыдущая вкладка</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">Tab</span> / <span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">Shift</span> + <span class="kbd-badge">Tab</span></td>
+          </tr>
+          <tr>
+            <td>Перейти на вкладку 1–9</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">1</span> … <span class="kbd-badge">9</span></td>
+          </tr>
+          <tr>
+            <td>Перейти в адресную строку</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">L</span> или <span class="kbd-badge">Alt</span> + <span class="kbd-badge">D</span> или <span class="kbd-badge">F6</span></td>
+          </tr>
+          <tr>
+            <td>Обновить страницу</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">R</span> или <span class="kbd-badge">F5</span></td>
+          </tr>
+          <tr>
+            <td>История просмотров</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">H</span></td>
+          </tr>
+          <tr>
+            <td>Добавить сайт в закладки</td>
+            <td style="text-align:right;"><span class="kbd-badge">Ctrl</span> + <span class="kbd-badge">D</span></td>
+          </tr>
+          <tr>
+            <td>Назад / Вперёд по истории</td>
+            <td style="text-align:right;"><span class="kbd-badge">Alt</span> + <span class="kbd-badge">←</span> / <span class="kbd-badge">Alt</span> + <span class="kbd-badge">→</span></td>
+          </tr>
+          <tr>
+            <td>Полноэкранный режим</td>
+            <td style="text-align:right;"><span class="kbd-badge">F11</span></td>
+          </tr>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <div class="toast" id="toast">Настройки применены</div>
+
+  <script>
+    const toast = document.getElementById('toast');
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 1600);
+    }
+
+    // Tab Navigation
+    document.querySelectorAll('.nav-item').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+        btn.classList.add('active');
+        const target = document.getElementById('sec-' + btn.dataset.tab);
+        if (target) target.classList.add('active');
+        if (btn.dataset.tab === 'import') {
+          loadBrowsers();
+        }
+      });
+    });
+
+    let settings = {
+      theme_mode: 'dark',
+      accent_color: '#ececec',
+      corner_radius: 4,
+      ui_transparency: 0,
+      top_panel_theme: 'default',
+      wallpaper_type: 'none',
+      wallpaper_url: '',
+      wallpaper_blur: 0,
+      wallpaper_brightness: 80,
+      has_prompted_import: false,
+      restore_session_mode: 'prompt',
+      search_engine: 'google'
+    };
+
+    function hexToRgba(hex, alpha) {
+      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
+      if (!m) return `rgba(236, 236, 236, ${alpha})`;
+      return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
+    }
+
+    window.applySettings = function(s) {
+      if (!s) return;
+      window._ferro_settings = s;
+      settings = Object.assign(settings, s);
+      applyStateToUi();
+    };
+
+    // Load initial settings
+    fetch('ferro://api/settings/get')
+      .then(r => r.json())
+      .then(s => {
+        if (s) {
+          window.applySettings(s);
+        }
+      })
+      .catch(() => applyStateToUi());
+
+    function saveSettings() {
+      window._ferro_settings = settings;
+      // 1. Post to Rust backend via IPC for instant 0ms global broadcast
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'save_settings', settings: settings }));
+      }
+      // 2. Also save via custom protocol POST as durable fallback
+      fetch('ferro://api/settings/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+      }).then(() => showToast('Настройки сохранены и применены!'))
+        .catch(() => {});
+    }
+
+    function applyStateToUi() {
+      const isLight = settings.theme_mode === 'light';
+      const effectiveAcc = (isLight && settings.accent_color.toLowerCase() === '#ececec') ? '#18181b' : settings.accent_color;
+      document.documentElement.setAttribute('data-theme', settings.theme_mode);
+      document.documentElement.style.setProperty('--accent', effectiveAcc);
+      document.documentElement.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.16));
+      document.documentElement.style.setProperty('--radius-ctrl', settings.corner_radius + 'px');
+      document.documentElement.style.setProperty('--radius-card', (settings.corner_radius === 0 ? 0 : Math.max(4, Math.round(settings.corner_radius * 1.25))) + 'px');
+
+      // Color Swatches
+      document.querySelectorAll('.color-swatch').forEach(sw => {
+        sw.classList.toggle('active', sw.dataset.color.toLowerCase() === settings.accent_color.toLowerCase());
+      });
+      document.getElementById('customColorPicker').value = settings.accent_color.startsWith('#') ? settings.accent_color : '#ececec';
+      document.getElementById('customColorHex').value = settings.accent_color;
+
+      // Theme mode buttons
+      document.getElementById('btnThemeDark').classList.toggle('active', settings.theme_mode === 'dark');
+      document.getElementById('btnThemeLight').classList.toggle('active', settings.theme_mode === 'light');
+
+      // Radius slider
+      document.getElementById('radiusSlider').value = settings.corner_radius;
+      document.getElementById('radiusVal').textContent = settings.corner_radius + 'px';
+      document.querySelectorAll('[data-rad]').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.rad) === settings.corner_radius);
+      });
+
+      // Transparency slider
+      document.getElementById('transparencySlider').value = settings.ui_transparency;
+      document.getElementById('transparencyVal').textContent = settings.ui_transparency + '%';
+
+      // Session restore
+      document.querySelectorAll('[data-session]').forEach(b => {
+        b.classList.toggle('active', b.dataset.session === settings.restore_session_mode);
+      });
+
+      // Wallpaper
+      document.querySelectorAll('.wp-card').forEach(c => {
+        c.classList.toggle('active', c.dataset.wp === settings.wallpaper_type);
+      });
+      document.getElementById('customWpUrl').value = settings.wallpaper_url || '';
+      document.getElementById('wpBlurSlider').value = settings.wallpaper_blur;
+      document.getElementById('wpBlurVal').textContent = settings.wallpaper_blur + 'px';
+      document.getElementById('wpBrightSlider').value = settings.wallpaper_brightness;
+      document.getElementById('wpBrightVal').textContent = settings.wallpaper_brightness + '%';
+
+      // Top bar
+      document.querySelectorAll('[data-topbar]').forEach(b => {
+        b.classList.toggle('active', b.dataset.topbar === settings.top_panel_theme);
+      });
+
+      // Update active filled line on all range sliders
+      document.querySelectorAll('.slider').forEach(sl => {
+        const min = parseFloat(sl.min) || 0;
+        const max = parseFloat(sl.max) || 100;
+        const val = parseFloat(sl.value) || 0;
+        const pct = Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100));
+        sl.style.setProperty('--p', pct + '%');
+      });
+    }
+
+    document.querySelectorAll('.slider').forEach(sl => {
+      sl.addEventListener('input', () => {
+        const min = parseFloat(sl.min) || 0;
+        const max = parseFloat(sl.max) || 100;
+        const val = parseFloat(sl.value) || 0;
+        const pct = Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100));
+        sl.style.setProperty('--p', pct + '%');
+      });
+    });
+
+    // Color listeners
+    document.querySelectorAll('.color-swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        settings.accent_color = sw.dataset.color;
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
+    document.getElementById('customColorPicker').addEventListener('input', (e) => {
+      settings.accent_color = e.target.value;
+      applyStateToUi();
+      saveSettings();
+    });
+
+    document.getElementById('customColorHex').addEventListener('change', (e) => {
+      let val = e.target.value.trim();
+      if (!val.startsWith('#')) val = '#' + val;
+      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
+        settings.accent_color = val;
+        applyStateToUi();
+        saveSettings();
+      }
+    });
+
+    document.getElementById('btnThemeDark').addEventListener('click', () => {
+      settings.theme_mode = 'dark';
+      applyStateToUi();
+      saveSettings();
+    });
+
+    document.getElementById('btnThemeLight').addEventListener('click', () => {
+      settings.theme_mode = 'light';
+      applyStateToUi();
+      saveSettings();
+    });
+
+    // Radius listeners
+    document.getElementById('radiusSlider').addEventListener('input', (e) => {
+      settings.corner_radius = parseInt(e.target.value);
+      applyStateToUi();
+      saveSettings();
+    });
+
+    document.querySelectorAll('[data-rad]').forEach(b => {
+      b.addEventListener('click', () => {
+        settings.corner_radius = parseInt(b.dataset.rad);
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
+    // Transparency listeners
+    document.getElementById('transparencySlider').addEventListener('input', (e) => {
+      settings.ui_transparency = parseInt(e.target.value);
+      applyStateToUi();
+      saveSettings();
+    });
+
+    // Session restore listeners
+    document.querySelectorAll('[data-session]').forEach(b => {
+      b.addEventListener('click', () => {
+        settings.restore_session_mode = b.dataset.session;
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
+    // Wallpaper listeners
+    document.querySelectorAll('.wp-card').forEach(c => {
+      c.addEventListener('click', () => {
+        settings.wallpaper_type = c.dataset.wp;
+        if (c.dataset.url) {
+          settings.wallpaper_url = c.dataset.url;
+        } else if (c.dataset.wp === 'none') {
+          settings.wallpaper_url = '';
+        }
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
+    document.getElementById('btnApplyCustomWp').addEventListener('click', () => {
+      const url = document.getElementById('customWpUrl').value.trim();
+      if (url) {
+        settings.wallpaper_type = 'custom';
+        settings.wallpaper_url = url;
+        applyStateToUi();
+        saveSettings();
+      }
+    });
+
+    document.getElementById('wpFileInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          settings.wallpaper_type = 'custom';
+          settings.wallpaper_url = ev.target.result;
+          applyStateToUi();
+          saveSettings();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    document.getElementById('wpBlurSlider').addEventListener('input', (e) => {
+      settings.wallpaper_blur = parseInt(e.target.value);
+      applyStateToUi();
+      saveSettings();
+    });
+
+    document.getElementById('wpBrightSlider').addEventListener('input', (e) => {
+      settings.wallpaper_brightness = parseInt(e.target.value);
+      applyStateToUi();
+      saveSettings();
+    });
+
+    // Top panel theme listeners
+    document.querySelectorAll('[data-topbar]').forEach(b => {
+      b.addEventListener('click', () => {
+        settings.top_panel_theme = b.dataset.topbar;
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
+    // Detect and load browsers for import
+    function loadBrowsers() {
+      fetch('ferro://api/import/detect')
+        .then(r => r.json())
+        .then(list => {
+          const container = document.getElementById('browserList');
+          if (!list || list.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">Сторонние браузеры не найдены в стандартных каталогах.</div>';
+            return;
+          }
+          container.innerHTML = list.map(b => `
+            <div class="browser-item">
+              <div class="browser-info">
+                <div class="browser-icon">${b.name.charAt(0)}</div>
+                <div>
+                  <div style="font-weight:600; font-size:13px;">${b.name}</div>
+                  <div style="font-size:11px; color:var(--text-secondary);">
+                    ${b.has_bookmarks ? `Закладки: ${b.bookmarks_count}` : ''} 
+                    ${b.has_history ? ` • История: ${b.history_count}` : ''}
+                  </div>
+                </div>
+              </div>
+              <button class="action-btn" onclick="executeImport('${b.id}')">Импортировать</button>
+            </div>
+          `).join('');
+        })
+        .catch(() => {
+          document.getElementById('browserList').innerHTML = '<div style="color:var(--text-muted);">Ошибка обнаружения браузеров.</div>';
+        });
+    }
+
+    window.executeImport = function(browserId) {
+      showToast('Выполняется импорт...');
+      fetch('ferro://api/import/run?browser=' + encodeURIComponent(browserId))
+        .then(r => r.json())
+        .then(res => {
+          showToast(`Успешно импортировано: ${res.bookmarks_imported} закладок, ${res.history_imported} страниц истории!`);
+          if (window.ipc) {
+            window.ipc.postMessage(JSON.stringify({ action: 'reload_bookmarks' }));
+          }
+        })
+        .catch(() => showToast('Ошибка при импорте'));
+    };
+
+    loadBrowsers();
+  </script>
+</body>
+</html>
