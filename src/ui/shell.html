@@ -1747,11 +1747,29 @@
         root.style.setProperty('--radius-omni', omniRad + 'px');
         shellEl.setAttribute('data-rounded', rad > 0 ? 'true' : 'false');
 
-        // Solid uniform top panel matching theme strictly (zero tints/gradients)
+        // Top panel themes in a single uniform solid tone (no gradients across tabs/strip)
         const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
-        const solidTone = isLight
-          ? `rgba(244, 244, 246, ${alpha})`
-          : `rgba(18, 18, 20, ${alpha})`;
+        const topThemes = {
+          carbon: `rgba(24, 26, 33, ${alpha})`,
+          obsidian: `rgba(24, 26, 33, ${alpha})`,
+          aurora: `rgba(11, 46, 49, ${alpha})`,
+          forest: `rgba(11, 46, 49, ${alpha})`,
+          sunset: `rgba(48, 22, 56, ${alpha})`,
+          neon: `rgba(22, 27, 64, ${alpha})`,
+          cyberpunk: `rgba(22, 27, 64, ${alpha})`,
+          nebula: `rgba(24, 18, 54, ${alpha})`
+        };
+
+        const rawTop = s.top_panel_theme || 'default';
+        const rawWp = s.wallpaper_type || 'none';
+        const effectivePreset = (rawTop !== 'default' && topThemes[rawTop])
+          ? rawTop
+          : (topThemes[rawWp] ? rawWp : 'default');
+
+        const solidTone = topThemes[effectivePreset]
+          ? topThemes[effectivePreset]
+          : (isLight ? `rgba(244, 244, 246, ${alpha})` : `rgba(18, 18, 20, ${alpha})`);
+
         root.style.setProperty('--bg-strip', solidTone);
         root.style.setProperty('--bg-toolbar', solidTone);
         shellEl.style.background = solidTone;

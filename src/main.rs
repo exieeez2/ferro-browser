@@ -295,10 +295,24 @@ fn sync_adblock_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
 
 fn compute_surface_rgba(s: &BrowserSettings) -> gdk::RGBA {
     let alpha = ((100 - s.ui_transparency.min(60)) as f64) / 100.0;
-    if s.theme_mode == "light" {
-        gdk::RGBA::new(244.0 / 255.0, 244.0 / 255.0, 246.0 / 255.0, alpha)
+    let key = if s.top_panel_theme != "default" && !s.top_panel_theme.is_empty() {
+        s.top_panel_theme.as_str()
     } else {
-        gdk::RGBA::new(18.0 / 255.0, 18.0 / 255.0, 20.0 / 255.0, alpha)
+        s.wallpaper_type.as_str()
+    };
+    match key {
+        "aurora" | "forest" => gdk::RGBA::new(11.0 / 255.0, 46.0 / 255.0, 49.0 / 255.0, alpha),
+        "neon" | "cyberpunk" => gdk::RGBA::new(22.0 / 255.0, 27.0 / 255.0, 64.0 / 255.0, alpha),
+        "sunset" => gdk::RGBA::new(48.0 / 255.0, 22.0 / 255.0, 56.0 / 255.0, alpha),
+        "nebula" => gdk::RGBA::new(24.0 / 255.0, 18.0 / 255.0, 54.0 / 255.0, alpha),
+        "carbon" | "obsidian" => gdk::RGBA::new(24.0 / 255.0, 26.0 / 255.0, 33.0 / 255.0, alpha),
+        _ => {
+            if s.theme_mode == "light" {
+                gdk::RGBA::new(244.0 / 255.0, 244.0 / 255.0, 246.0 / 255.0, alpha)
+            } else {
+                gdk::RGBA::new(18.0 / 255.0, 18.0 / 255.0, 20.0 / 255.0, alpha)
+            }
+        }
     }
 }
 

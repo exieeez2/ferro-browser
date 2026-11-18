@@ -908,17 +908,50 @@
         <p class="section-desc">Строгая цветовая схема, геометрия интерфейса и фон новой вкладки.</p>
       </div>
 
-      <div class="group-label">Цветовая схема</div>
+      <div class="group-label">Цветовая схема и верхняя панель</div>
       <div class="panel">
         <div class="setting-row">
           <div class="row-info">
             <div class="row-title">Тема оформления</div>
-            <div class="row-sub">Переключение между строгой тёмной и светлой монохромной палитрой браузера.</div>
+            <div class="row-sub">Переключение между тёмной и светлой палитрой браузера.</div>
           </div>
           <div class="row-ctrl">
             <div class="segmented">
               <button class="seg-btn active" id="btnThemeDark">Тёмная</button>
               <button class="seg-btn" id="btnThemeLight">Светлая</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row block-row">
+          <div class="row-info">
+            <div class="row-title">Стиль верхней панели</div>
+            <div class="row-sub">Цветовое оформление шапки вкладок, навигации и панели закладок.</div>
+          </div>
+          <div class="preset-grid">
+            <div class="preset-card active" data-topbar="default">
+              <div class="preset-thumb" style="background:#141416;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Монохром</div>
+            </div>
+            <div class="preset-card" data-topbar="carbon">
+              <div class="preset-thumb" style="background:#181a21;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Обсидиан</div>
+            </div>
+            <div class="preset-card" data-topbar="aurora">
+              <div class="preset-thumb" style="background:#0b2e31;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Северное сияние</div>
+            </div>
+            <div class="preset-card" data-topbar="sunset">
+              <div class="preset-thumb" style="background:#301638;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Закат</div>
+            </div>
+            <div class="preset-card" data-topbar="neon">
+              <div class="preset-thumb" style="background:#161b40;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Кибернеон</div>
+            </div>
+            <div class="preset-card" data-topbar="nebula">
+              <div class="preset-thumb" style="background:#181236;"><div class="mock-tab"></div></div>
+              <div class="preset-label">Космос</div>
             </div>
           </div>
         </div>
@@ -964,7 +997,7 @@
         <div class="setting-row block-row">
           <div class="row-info">
             <div class="row-title">Фоновое изображение</div>
-            <div class="row-sub">Монохромное оформление по умолчанию, прямое URL-изображение или локальный файл.</div>
+            <div class="row-sub">Встроенные гармоничные темы, прямое URL-изображение или локальный файл.</div>
           </div>
           <div class="preset-grid">
             <div class="preset-card wp-card active" data-wp="none">
@@ -972,8 +1005,24 @@
               <div class="preset-label">Без фона</div>
             </div>
             <div class="preset-card wp-card" data-wp="obsidian" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #26272e 0%, #17181c 50%, #101012 100%);"></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #323442 0%, #1e2029 50%, #121318 100%);"></div>
               <div class="preset-label">Обсидиан</div>
+            </div>
+            <div class="preset-card wp-card" data-wp="forest" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #115e59 0%, #0b3b3c 48%, #071c21 100%);"></div>
+              <div class="preset-label">Северный лес</div>
+            </div>
+            <div class="preset-card wp-card" data-wp="sunset" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #9a3412 0%, #581c87 48%, #1f1235 100%);"></div>
+              <div class="preset-label">Закат</div>
+            </div>
+            <div class="preset-card wp-card" data-wp="cyberpunk" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #5b21b6 0%, #1e295b 50%, #0b1329 100%);"></div>
+              <div class="preset-label">Кибернеон</div>
+            </div>
+            <div class="preset-card wp-card" data-wp="nebula" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 65% 0%, #4c1d95 0%, #1e1b4b 50%, #0b0a1a 100%);"></div>
+              <div class="preset-label">Космос</div>
             </div>
           </div>
 
@@ -1460,12 +1509,8 @@
 
     function applyStateToUi() {
       const isLight = settings.theme_mode === 'light';
-      // Strict unified monochrome styling
+      // Strict unified monochrome accent for controls & inputs
       settings.accent_color = isLight ? '#18181b' : '#ececec';
-      settings.top_panel_theme = 'default';
-      if (['forest', 'aurora', 'sunset', 'cyberpunk', 'neon', 'nebula'].includes(settings.wallpaper_type)) {
-        settings.wallpaper_type = 'none';
-      }
 
       const effectiveAcc = isLight ? '#18181b' : '#ececec';
       const uiActive = isLight ? '#18181b' : '#ececec';
@@ -1497,6 +1542,10 @@
       // Appearance
       document.getElementById('btnThemeDark').classList.toggle('active', !isLight);
       document.getElementById('btnThemeLight').classList.toggle('active', isLight);
+
+      document.querySelectorAll('[data-topbar]').forEach(c => {
+        c.classList.toggle('active', c.dataset.topbar === (settings.top_panel_theme || 'default'));
+      });
 
       document.getElementById('radiusSlider').value = settings.corner_radius;
       document.getElementById('radiusVal').textContent = settings.corner_radius + 'px';
@@ -1666,12 +1715,45 @@
       saveSettings(true);
     });
 
+    const TOPBAR_TO_WP = {
+      default: 'none',
+      carbon: 'obsidian',
+      aurora: 'forest',
+      sunset: 'sunset',
+      neon: 'cyberpunk',
+      nebula: 'nebula'
+    };
+
+    const WP_TO_TOPBAR = {
+      none: 'default',
+      obsidian: 'carbon',
+      forest: 'aurora',
+      sunset: 'sunset',
+      cyberpunk: 'neon',
+      nebula: 'nebula'
+    };
+
+    document.querySelectorAll('[data-topbar]').forEach(c => {
+      c.addEventListener('click', () => {
+        const tb = c.dataset.topbar;
+        settings.top_panel_theme = tb;
+        if (settings.wallpaper_type !== 'custom' && TOPBAR_TO_WP[tb]) {
+          settings.wallpaper_type = TOPBAR_TO_WP[tb];
+          settings.wallpaper_url = '';
+        }
+        applyStateToUi();
+        saveSettings();
+      });
+    });
+
     document.querySelectorAll('.wp-card').forEach(c => {
       c.addEventListener('click', () => {
         const wp = c.dataset.wp;
         settings.wallpaper_type = wp;
         settings.wallpaper_url = c.dataset.url || '';
-        settings.top_panel_theme = 'default';
+        if (WP_TO_TOPBAR[wp]) {
+          settings.top_panel_theme = WP_TO_TOPBAR[wp];
+        }
         applyStateToUi();
         saveSettings();
       });

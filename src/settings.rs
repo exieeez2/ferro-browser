@@ -151,17 +151,6 @@ impl BrowserSettings {
                         };
                         changed = true;
                     }
-                    if settings.top_panel_theme != "default" {
-                        settings.top_panel_theme = "default".to_string();
-                        changed = true;
-                    }
-                    if matches!(
-                        settings.wallpaper_type.as_str(),
-                        "forest" | "aurora" | "sunset" | "cyberpunk" | "neon" | "nebula"
-                    ) {
-                        settings.wallpaper_type = "none".to_string();
-                        changed = true;
-                    }
                     if changed {
                         let _ = settings.save();
                     }
