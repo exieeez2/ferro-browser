@@ -17,8 +17,15 @@ pub struct SessionData {
 
 impl SessionData {
     pub fn file_path() -> PathBuf {
-        let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-        config_dir.join("ferro").join("session.json")
+        #[cfg(test)]
+        {
+            return std::env::temp_dir().join(format!("ferro_test_session_{}.json", std::process::id()));
+        }
+        #[cfg(not(test))]
+        {
+            let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+            config_dir.join("ferro").join("session.json")
+        }
     }
 
     pub fn save(tabs: &[SessionTab]) -> Result<(), std::io::Error> {

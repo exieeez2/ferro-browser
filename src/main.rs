@@ -4533,7 +4533,82 @@ fn spawn_browser_window(
     state
 }
 
+fn ensure_desktop_shortcut() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(home) = dirs::home_dir() else { return };
+    const LOGO_PNG: &[u8] = include_bytes!("ui/logo.png");
+
+    let icon_512_dir = home.join(".local/share/icons/hicolor/512x512/apps");
+    let icon_256_dir = home.join(".local/share/icons/hicolor/256x256/apps");
+    let _ = std::fs::create_dir_all(&icon_512_dir);
+    let _ = std::fs::create_dir_all(&icon_256_dir);
+
+    let icon_512_path = icon_512_dir.join("ferro.png");
+    let icon_256_path = icon_256_dir.join("ferro.png");
+    let _ = std::fs::write(&icon_512_path, LOGO_PNG);
+    let _ = std::fs::write(&icon_256_path, LOGO_PNG);
+
+    let repo_dir = env!("CARGO_MANIFEST_DIR");
+    let bin_dir = home.join(".local/bin");
+    let _ = std::fs::create_dir_all(&bin_dir);
+    let launcher_path = bin_dir.join("ferro");
+    let launcher_script = format!(
+        "#!/usr/bin/env bash\n\
+REPO_DIR=\"{repo}\"\n\
+REL_BIN=\"$REPO_DIR/target/release/ferro\"\n\
+DBG_BIN=\"$REPO_DIR/target/debug/ferro\"\n\
+if [ -x \"$REL_BIN\" ] && [ -x \"$DBG_BIN\" ]; then\n\
+  if [ \"$DBG_BIN\" -nt \"$REL_BIN\" ]; then\n\
+    exec \"$DBG_BIN\" \"$@\"\n\
+  else\n\
+    exec \"$REL_BIN\" \"$@\"\n\
+  fi\n\
+elif [ -x \"$REL_BIN\" ]; then\n\
+  exec \"$REL_BIN\" \"$@\"\n\
+elif [ -x \"$DBG_BIN\" ]; then\n\
+  exec \"$DBG_BIN\" \"$@\"\n\
+else\n\
+  cd \"$REPO_DIR\" || exit 1\n\
+  exec cargo run --release -- \"$@\"\n\
+fi\n",
+        repo = repo_dir
+    );
+    if std::fs::write(&launcher_path, launcher_script).is_ok() {
+        let _ = std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    let apps_dir = home.join(".local/share/applications");
+    let _ = std::fs::create_dir_all(&apps_dir);
+    let desktop_path = apps_dir.join("ferro.desktop");
+    let desktop_content = format!(
+        "[Desktop Entry]\n\
+Type=Application\n\
+Name=Ferro\n\
+GenericName=Web Browser\n\
+GenericName[ru]=Веб-браузер\n\
+Comment=Быстрый минималистичный браузер Ferro\n\
+Exec={launcher} %U\n\
+TryExec={launcher}\n\
+Path={repo}\n\
+Icon={icon}\n\
+Terminal=false\n\
+Categories=Network;WebBrowser;\n\
+StartupWMClass=ferro\n\
+StartupNotify=true\n\
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\n",
+        launcher = launcher_path.to_string_lossy(),
+        repo = repo_dir,
+        icon = icon_512_path.to_string_lossy()
+    );
+    if std::fs::write(&desktop_path, desktop_content).is_ok() {
+        let _ = std::fs::set_permissions(&desktop_path, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
 fn main() {
+    ensure_desktop_shortcut();
+
     let single_instance = ensure_single_instance();
     if single_instance.is_none() {
         return;
@@ -4551,6 +4626,8 @@ fn main() {
         );
     }
 
+    glib::set_prgname(Some("ferro"));
+    glib::set_application_name("Ferro");
     gtk::init().expect("Не удалось инициализировать GTK");
 
     let initial_settings = BrowserSettings::load_or_default();

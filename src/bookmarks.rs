@@ -45,12 +45,19 @@ impl Default for BookmarksData {
 
 impl BookmarksData {
     pub fn config_path() -> PathBuf {
-        if let Some(config_dir) = dirs::config_dir() {
-            let dir = config_dir.join("ferro");
-            let _ = fs::create_dir_all(&dir);
-            dir.join("bookmarks.json")
-        } else {
-            PathBuf::from("bookmarks.json")
+        #[cfg(test)]
+        {
+            return std::env::temp_dir().join(format!("ferro_test_bookmarks_{}.json", std::process::id()));
+        }
+        #[cfg(not(test))]
+        {
+            if let Some(config_dir) = dirs::config_dir() {
+                let dir = config_dir.join("ferro");
+                let _ = fs::create_dir_all(&dir);
+                dir.join("bookmarks.json")
+            } else {
+                PathBuf::from("bookmarks.json")
+            }
         }
     }
 
@@ -72,6 +79,8 @@ impl BookmarksData {
                     return parsed;
                 }
             }
+            // If file exists on disk, never overwrite it with defaults on a transient read error
+            return Self::default();
         }
         let def = Self::default();
         def.save();
@@ -81,13 +90,34 @@ impl BookmarksData {
     pub fn save(&self) {
         let path = Self::config_path();
         if let Ok(serialized) = serde_json::to_string_pretty(self) {
-            let _ = fs::write(path, serialized);
+            let tmp_path = path.with_extension("json.tmp");
+            if fs::write(&tmp_path, &serialized).is_ok() {
+                let _ = fs::rename(&tmp_path, &path);
+            } else {
+                let _ = fs::write(&path, serialized);
+            }
         }
     }
 
-    #[allow(dead_code)]
     pub fn contains(&self, url: &str) -> bool {
         self.items.iter().any(|b| b.url == url)
+    }
+
+    pub fn add_if_missing(&mut self, url: &str, title: &str) -> bool {
+        if self.contains(url) || Self::is_spam_bookmark(url) {
+            return false;
+        }
+        let icon = title
+            .chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "★".to_string());
+        self.items.push(BookmarkItem {
+            url: url.to_string(),
+            title: if title.is_empty() { url.to_string() } else { title.to_string() },
+            icon,
+        });
+        true
     }
 
     pub fn toggle(&mut self, url: &str, title: &str) -> bool {
@@ -96,16 +126,7 @@ impl BookmarksData {
             self.save();
             false
         } else {
-            let icon = title
-                .chars()
-                .next()
-                .map(|c| c.to_uppercase().to_string())
-                .unwrap_or_else(|| "★".to_string());
-            self.items.push(BookmarkItem {
-                url: url.to_string(),
-                title: if title.is_empty() { url.to_string() } else { title.to_string() },
-                icon,
-            });
+            self.add_if_missing(url, title);
             self.save();
             true
         }

@@ -39,7 +39,7 @@ impl BrowserImporter {
         }
         let uri = format!("file:{}?immutable=1", db_path.to_string_lossy());
         Command::new("sqlite3")
-            .args(["-readonly", &uri, sql])
+            .args(["-init", "/dev/null", "-batch", "-noheader", "-list", "-readonly", &uri, sql])
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -143,18 +143,24 @@ impl BrowserImporter {
             }
         }
 
-        // Scan Firefox / Zen / LibreWolf / Waterfox roots (any folder containing places.sqlite!)
+        // Scan Firefox / Zen / LibreWolf / Waterfox roots (including XDG ~/.config/mozilla/firefox!)
         let gecko_roots = [
-            ("firefox", "Mozilla Firefox", home.join(".mozilla/firefox")),
+            ("firefox", "Mozilla Firefox", home.join(".config/mozilla/firefox")),
+            ("firefox_legacy", "Mozilla Firefox", home.join(".mozilla/firefox")),
             ("firefox_flatpak", "Firefox (Flatpak)", home.join(".var/app/org.mozilla.firefox/.mozilla/firefox")),
+            ("firefox_flatpak_xdg", "Firefox (Flatpak)", home.join(".var/app/org.mozilla.firefox/config/mozilla/firefox")),
+            ("firefox_snap", "Firefox (Snap)", home.join("snap/firefox/common/.mozilla/firefox")),
             ("zen", "Zen Browser", home.join(".config/zen")),
             ("zen_home", "Zen Browser", home.join(".zen")),
             ("zen_flatpak", "Zen Browser (Flatpak)", home.join(".var/app/app.zen_browser.zen/.zen")),
             ("librewolf", "LibreWolf", home.join(".librewolf")),
+            ("librewolf_xdg", "LibreWolf", home.join(".config/librewolf")),
             ("librewolf_flatpak", "LibreWolf (Flatpak)", home.join(".var/app/io.gitlab.librewolf-community/.librewolf")),
             ("waterfox", "Waterfox", home.join(".waterfox")),
             ("waterfox_flatpak", "Waterfox (Flatpak)", home.join(".var/app/net.waterfox.waterfox/.waterfox")),
         ];
+
+        let mut seen_places = std::collections::HashSet::new();
 
         for (base_id, base_name, root_dir) in gecko_roots {
             if !root_dir.exists() {
@@ -170,10 +176,14 @@ impl BrowserImporter {
                 if !places.exists() {
                     continue;
                 }
+                let canon = fs::canonicalize(&places).unwrap_or_else(|_| places.clone());
+                if !seen_places.insert(canon) {
+                    continue;
+                }
                 let sub_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
                 let bm_count = Self::fast_sqlite_count(
                     &places,
-                    "SELECT MIN(COUNT(*), 500) FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%';",
+                    "SELECT MIN(COUNT(*), 500) FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%' AND p.url NOT LIKE '%clck.showmelinks.com%' AND p.url NOT LIKE '%yandex.ru/search/?clid=2296555%';",
                 );
                 let hist_count = Self::fast_sqlite_count(
                     &places,
@@ -260,6 +270,11 @@ impl BrowserImporter {
 
         let output = Command::new("sqlite3")
             .args([
+                "-init",
+                "/dev/null",
+                "-batch",
+                "-noheader",
+                "-list",
                 tmp_copy.to_string_lossy().as_ref(),
                 "SELECT url, REPLACE(REPLACE(COALESCE(title,''), char(10), ' '), char(13), ' ') FROM urls ORDER BY last_visit_time DESC LIMIT 1000;",
             ])
@@ -304,15 +319,22 @@ impl BrowserImporter {
 
         if let Ok(out) = Command::new("sqlite3")
             .args([
+                "-init",
+                "/dev/null",
+                "-batch",
+                "-noheader",
+                "-list",
                 tmp_copy.to_string_lossy().as_ref(),
-                "SELECT p.url, REPLACE(REPLACE(COALESCE(b.title,''), char(10), ' '), char(13), ' ') FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%' LIMIT 500;",
+                "SELECT p.url, REPLACE(REPLACE(COALESCE(b.title,''), char(10), ' '), char(13), ' ') FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%' AND p.url NOT LIKE '%support.mozilla.org%' AND p.url NOT LIKE '%www.mozilla.org/contribute%' AND p.url NOT LIKE '%www.mozilla.org/about%' ORDER BY CASE WHEN b.parent = 3 THEN 0 ELSE 1 END, b.position ASC LIMIT 500;",
             ])
             .output()
         {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
                 if let Some((url, title)) = line.split_once('|') {
-                    if url.starts_with("http://") || url.starts_with("https://") {
+                    if (url.starts_with("http://") || url.starts_with("https://"))
+                        && !crate::bookmarks::BookmarksData::is_spam_bookmark(url)
+                    {
                         let clean_title = if title.trim().is_empty() { url } else { title.trim() };
                         bookmarks.push((url.to_string(), clean_title.to_string()));
                     }
@@ -322,6 +344,11 @@ impl BrowserImporter {
 
         if let Ok(out) = Command::new("sqlite3")
             .args([
+                "-init",
+                "/dev/null",
+                "-batch",
+                "-noheader",
+                "-list",
                 tmp_copy.to_string_lossy().as_ref(),
                 "SELECT url, REPLACE(REPLACE(COALESCE(title,''), char(10), ' '), char(13), ' ') FROM moz_places WHERE visit_count > 0 AND url LIKE 'http%' ORDER BY last_visit_date DESC LIMIT 1000;",
             ])
@@ -366,9 +393,7 @@ impl BrowserImporter {
 
                 let mut bm_data = crate::bookmarks::BookmarksData::load_or_default();
                 for (url, title) in bm {
-                    if !bm_data.contains(&url) {
-                        bm_data.toggle(&url, &title);
-                    }
+                    bm_data.add_if_missing(&url, &title);
                 }
                 bm_data.save();
 
@@ -385,9 +410,7 @@ impl BrowserImporter {
                 bookmarks_count = bm.len();
                 let mut bm_data = crate::bookmarks::BookmarksData::load_or_default();
                 for (url, title) in bm {
-                    if !bm_data.contains(&url) {
-                        bm_data.toggle(&url, &title);
-                    }
+                    bm_data.add_if_missing(&url, &title);
                 }
                 bm_data.save();
 
