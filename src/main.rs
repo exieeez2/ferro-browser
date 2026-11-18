@@ -4289,27 +4289,29 @@ fn spawn_browser_window(
         glib::Propagation::Proceed
     });
 
-    // Setup Top UI WebView
+    // Setup Top UI WebView using the shared WebContext so WebKitGTK uses a single WebKitNetworkProcess!
     let state_for_ipc = state.clone();
     let top_init_js = format!(
         "window.addEventListener('DOMContentLoaded', function() {{ if (window.ferro && window.ferro.applySettings) {{ window.ferro.applySettings({}); }} }});",
         initial_settings_json
     );
-    let top_builder = WebViewBuilder::new()
-        .with_transparent(true)
-        .with_initialization_script(&top_init_js)
-        .with_html(SHELL_HTML)
-        .with_ipc_handler(move |req| {
-            match serde_json::from_str::<IpcMessage>(req.body()) {
-                Ok(msg) => handle_ipc(&state_for_ipc, msg),
-                Err(e) => eprintln!("[Ferro Shell IPC Parse Error] {:?}: {}", e, req.body()),
+    let top_webview = {
+        let mut web_ctx = core.web_context.borrow_mut();
+        let top_builder = WebViewBuilder::new_with_web_context(&mut *web_ctx)
+            .with_transparent(true)
+            .with_initialization_script(&top_init_js)
+            .with_html(SHELL_HTML)
+            .with_ipc_handler(move |req| {
+                match serde_json::from_str::<IpcMessage>(req.body()) {
+                    Ok(msg) => handle_ipc(&state_for_ipc, msg),
+                    Err(e) => eprintln!("[Ferro Shell IPC Parse Error] {:?}: {}", e, req.body()),
+                }
+            });
+        match top_builder.build_gtk(&top_box) {
+            Ok(wv) => Rc::new(wv),
+            Err(e) => {
+                panic!("Не удалось создать верхний UI Webview: {:?}", e);
             }
-        });
-
-    let top_webview = match top_builder.build_gtk(&top_box) {
-        Ok(wv) => Rc::new(wv),
-        Err(e) => {
-            panic!("Не удалось создать верхний UI Webview: {:?}", e);
         }
     };
     let top_inner = top_webview.webview();
@@ -4690,33 +4692,18 @@ fn ensure_desktop_shortcut() {
     let _ = std::fs::write(&icon_256_path, LOGO_PNG);
 
     let repo_dir = env!("CARGO_MANIFEST_DIR");
+    let release_bin = std::path::PathBuf::from(repo_dir).join("target/release/ferro");
+    let exec_bin = std::env::current_exe()
+        .ok()
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| release_bin.clone());
+    let target_bin = if release_bin.exists() { &release_bin } else { &exec_bin };
+
     let bin_dir = home.join(".local/bin");
     let _ = std::fs::create_dir_all(&bin_dir);
     let launcher_path = bin_dir.join("ferro");
-    let launcher_script = format!(
-        "#!/usr/bin/env bash\n\
-REPO_DIR=\"{repo}\"\n\
-REL_BIN=\"$REPO_DIR/target/release/ferro\"\n\
-DBG_BIN=\"$REPO_DIR/target/debug/ferro\"\n\
-if [ -x \"$REL_BIN\" ] && [ -x \"$DBG_BIN\" ]; then\n\
-  if [ \"$DBG_BIN\" -nt \"$REL_BIN\" ]; then\n\
-    exec \"$DBG_BIN\" \"$@\"\n\
-  else\n\
-    exec \"$REL_BIN\" \"$@\"\n\
-  fi\n\
-elif [ -x \"$REL_BIN\" ]; then\n\
-  exec \"$REL_BIN\" \"$@\"\n\
-elif [ -x \"$DBG_BIN\" ]; then\n\
-  exec \"$DBG_BIN\" \"$@\"\n\
-else\n\
-  cd \"$REPO_DIR\" || exit 1\n\
-  exec cargo run --release -- \"$@\"\n\
-fi\n",
-        repo = repo_dir
-    );
-    if std::fs::write(&launcher_path, launcher_script).is_ok() {
-        let _ = std::fs::set_permissions(&launcher_path, std::fs::Permissions::from_mode(0o755));
-    }
+    let _ = std::fs::remove_file(&launcher_path);
+    let _ = std::os::unix::fs::symlink(target_bin, &launcher_path);
 
     let apps_dir = home.join(".local/share/applications");
     let _ = std::fs::create_dir_all(&apps_dir);
@@ -4728,21 +4715,72 @@ Name=Ferro\n\
 GenericName=Web Browser\n\
 GenericName[ru]=Веб-браузер\n\
 Comment=Быстрый минималистичный браузер Ferro\n\
-Exec={launcher} %U\n\
-TryExec={launcher}\n\
+Exec={bin} %U\n\
+TryExec={bin}\n\
 Path={repo}\n\
 Icon={icon}\n\
 Terminal=false\n\
 Categories=Network;WebBrowser;\n\
 StartupWMClass=ferro\n\
 StartupNotify=true\n\
+X-GNOME-UsesNotifications=true\n\
 MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;\n",
-        launcher = launcher_path.to_string_lossy(),
+        bin = target_bin.to_string_lossy(),
         repo = repo_dir,
         icon = icon_512_path.to_string_lossy()
     );
     if std::fs::write(&desktop_path, desktop_content).is_ok() {
         let _ = std::fs::set_permissions(&desktop_path, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// Places Ferro's main process into its own XDG systemd user application scope (`app-ferro-<pid>.scope`
+/// under `app.slice`) BEFORE spawning WebKitGTK child processes (`WebKitNetworkProcess`, `WebKitWebProcess`,
+/// `bwrap`, `xdg-dbus-proxy`). Task managers (Mission Center, KDE System Monitor, GNOME System Monitor, Resources)
+/// automatically group all processes in `app-ferro-<pid>.scope` into a single "Ferro" entry under "Applications" ("Приложения")!
+fn ensure_systemd_app_scope() {
+    if let Ok(cg) = std::fs::read_to_string("/proc/self/cgroup") {
+        if cg.contains("/app-ferro-") {
+            return;
+        }
+    }
+    let pid = std::process::id().to_string();
+    let unit = format!("app-ferro-{}.scope", pid);
+    let _ = std::process::Command::new("busctl")
+        .args([
+            "--user",
+            "call",
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "StartTransientUnit",
+            "ssa(sv)a(sa(sv))",
+            &unit,
+            "fail",
+            "3",
+            "Description",
+            "s",
+            "Ferro",
+            "Slice",
+            "s",
+            "app.slice",
+            "PIDs",
+            "au",
+            "1",
+            &pid,
+            "0",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    for _ in 0..16 {
+        if let Ok(cg) = std::fs::read_to_string("/proc/self/cgroup") {
+            if cg.contains("/app-ferro-") {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
 
@@ -4753,6 +4791,8 @@ fn main() {
     if single_instance.is_none() {
         return;
     }
+
+    ensure_systemd_app_scope();
 
     // Ensure GStreamer uses hardware Intel VA-API VP9 (`vavp9dec:MAX`) & H.264 (`vah264dec:MAX`) + GL sink
     // for 1080p60 / 1440p60 / 4K60 playback while disabling slow single-threaded `vp9dec` / `av1dec`!
