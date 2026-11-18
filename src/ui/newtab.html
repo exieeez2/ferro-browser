@@ -171,21 +171,29 @@
       border: 1px solid var(--border-strong);
       border-radius: var(--radius-ctrl);
       padding: 12px;
-      display: none;
+      display: flex;
       flex-direction: column;
       gap: 8px;
       z-index: 25;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform-origin: top right;
+      transform: translateY(-6px) scale(0.96);
+      transition: opacity 165ms cubic-bezier(0.23, 1, 0.32, 1), transform 175ms cubic-bezier(0.23, 1, 0.32, 1), visibility 175ms;
     }
 
     .settings-popover.open {
-      display: flex;
-      animation: popIn 0.14s cubic-bezier(0.2, 0, 0, 1);
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
     }
 
-    @keyframes popIn {
-      from { opacity: 0; transform: translateY(-4px); }
-      to { opacity: 1; transform: translateY(0); }
+    @keyframes heroUp {
+      from { opacity: 0; transform: translateY(10px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
 
     .popover-head {
@@ -278,6 +286,7 @@
       flex-direction: column;
       align-items: center;
       gap: 10px;
+      animation: heroUp 240ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
     }
 
     .wordmark {
@@ -294,6 +303,7 @@
       width: 100%;
       max-width: 610px;
       z-index: 12;
+      animation: heroUp 260ms cubic-bezier(0.23, 1, 0.32, 1) 45ms backwards;
     }
 
     .search-form {
@@ -366,15 +376,23 @@
       border-radius: var(--radius-ctrl);
       padding: 5px;
       box-shadow: 0 14px 36px rgba(0, 0, 0, 0.52);
-      display: none;
+      display: flex;
       flex-direction: column;
       gap: 2px;
       z-index: 30;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform-origin: top left;
+      transform: translateY(-6px) scale(0.96);
+      transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1), transform 165ms cubic-bezier(0.23, 1, 0.32, 1), visibility 165ms;
     }
 
     .engine-dropdown.open {
-      display: flex;
-      animation: popIn 0.12s cubic-bezier(0.2, 0, 0, 1);
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
     }
 
     .engine-option {
@@ -450,6 +468,10 @@
       gap: 8px;
     }
 
+    .tile-wrap.tile-enter {
+      animation: heroUp 240ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+    }
+
     .tile {
       width: 72px;
       height: 72px;
@@ -464,17 +486,29 @@
       text-decoration: none;
       cursor: pointer;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-      transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s cubic-bezier(0.2, 0, 0, 1), border-radius 0.15s ease;
+      transition: border-color 150ms ease, background 150ms ease, transform 165ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 165ms cubic-bezier(0.23, 1, 0.32, 1), border-radius 150ms ease;
     }
 
-    .tile:hover {
-      border-color: var(--accent);
-      background: var(--bg-hover);
-      transform: translateY(-2px);
+    @media (hover: hover) and (pointer: fine) {
+      .tile:hover {
+        border-color: var(--accent);
+        background: var(--bg-hover);
+        transform: translateY(-3px) scale(1.03);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+      }
     }
 
     .tile:active {
-      transform: scale(0.96);
+      transform: scale(0.95);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .brand, .search-container, .tile-wrap.tile-enter {
+        animation: none !important;
+      }
+      .tile, .settings-popover, .engine-dropdown {
+        transition-duration: 0.01ms !important;
+      }
     }
 
     .tile-favicon-img {
@@ -872,9 +906,14 @@
       shortcutsGrid.innerHTML = '';
 
       if (state.showShortcuts) {
-        state.shortcuts.forEach(item => {
+        const shouldStagger = !window._ntpTilesAnimated;
+        window._ntpTilesAnimated = true;
+        state.shortcuts.forEach((item, idx) => {
           const wrap = document.createElement('div');
-          wrap.className = 'tile-wrap';
+          wrap.className = 'tile-wrap' + (shouldStagger ? ' tile-enter' : '');
+          if (shouldStagger) {
+            wrap.style.animationDelay = `${80 + Math.min(idx * 35, 280)}ms`;
+          }
           const iconHtml = getTileIconHtml(item.url, item.title);
           wrap.innerHTML = `
             <a class="tile" href="${escapeHtml(item.url)}" title="${escapeHtml(item.url)}">
@@ -883,6 +922,12 @@
             <button class="tile-del" title="Удалить ярлык">×</button>
             <span class="tile-label">${escapeHtml(item.title)}</span>
           `;
+          wrap.querySelector('.tile').addEventListener('click', (ev) => {
+            if (ev.button === 0 && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && window.ipc) {
+              ev.preventDefault();
+              window.ipc.postMessage(JSON.stringify({ action: 'navigate', url: item.url }));
+            }
+          });
           wrap.querySelector('.tile-del').addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -911,7 +956,11 @@
         const isDomain = /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(\/.*)?$/.test(q);
         target = isDomain ? ('https://' + q) : (eng.url + encodeURIComponent(q));
       }
-      window.location.href = target;
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'navigate', url: target }));
+      } else {
+        window.location.href = target;
+      }
     });
 
     gearBtn.addEventListener('click', (e) => {

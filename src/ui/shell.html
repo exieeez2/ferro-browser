@@ -23,6 +23,9 @@
       --radius-tab: 4px;
       --radius-ctrl: 4px;
       --radius-omni: 4px;
+      --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+      --ease-spring: cubic-bezier(0.34, 1.38, 0.64, 1);
       --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       --font-mono: 'JetBrains Mono', ui-monospace, monospace;
     }
@@ -58,7 +61,13 @@
       box-sizing: border-box;
       margin: 0;
       padding: 0;
+      -webkit-user-select: none;
       user-select: none;
+    }
+
+    img, svg {
+      -webkit-user-drag: none;
+      pointer-events: none;
     }
 
     html, body {
@@ -143,8 +152,24 @@
       font-size: 12px;
       font-weight: 500;
       cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease, border-radius 0.15s ease;
+      touch-action: none;
+      transition: background 140ms ease, color 140ms ease, border-radius 160ms var(--ease-out), opacity 140ms var(--ease-out), transform 170ms var(--ease-out), box-shadow 160ms var(--ease-out);
       flex-shrink: 0;
+    }
+
+    .tab.dragging {
+      z-index: 40 !important;
+      cursor: grabbing;
+      background: var(--bg-toolbar);
+      color: var(--text-primary);
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.48);
+      transition: background 120ms ease, box-shadow 120ms ease !important;
+    }
+
+    .tab.tab-closing {
+      opacity: 0 !important;
+      transform: scale(0.92) translateY(4px) !important;
+      pointer-events: none;
     }
 
     .shell-container[data-rounded="true"] .tab {
@@ -468,15 +493,24 @@
       background: var(--bg-elevated);
       border: 1px solid var(--accent);
       border-radius: var(--radius-ctrl);
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
-      display: none;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.58);
+      display: inline-flex;
       align-items: center;
       gap: 4px;
       z-index: 999;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform-origin: top left;
+      transform: translateY(-5px) scale(0.96);
+      transition: opacity 150ms var(--ease-out), transform 160ms var(--ease-out), visibility 160ms;
     }
 
     .omni-engine-bar.open {
-      display: inline-flex;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
     }
 
     .omni-eng-opt {
@@ -512,6 +546,7 @@
       font-family: var(--font-sans);
       font-size: 12px;
       min-width: 0;
+      -webkit-user-select: text;
       user-select: text;
     }
 
@@ -618,8 +653,12 @@
     }
 
     @keyframes tabIn {
-      from { opacity: 0; transform: translateY(3px); }
-      to { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; transform: translateY(5px) scale(0.96); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes chipIn {
+      from { opacity: 0; transform: translateY(3px) scale(0.97); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
     }
     @keyframes spinOnce {
       from { transform: rotate(0deg); }
@@ -627,13 +666,44 @@
     }
     @keyframes starPop {
       0% { transform: scale(1); }
-      50% { transform: scale(1.3); }
+      45% { transform: scale(1.28); }
       100% { transform: scale(1); }
     }
+    @keyframes loadingShimmer {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(220%); }
+    }
 
-    .tab.tab-new { animation: tabIn 0.14s cubic-bezier(0.2, 0, 0, 1); }
-    .spinning { animation: spinOnce 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
-    .star-pop { animation: starPop 0.18s cubic-bezier(0.2, 0, 0, 1); }
+    .tab.tab-new { animation: tabIn 180ms var(--ease-out); }
+    .bookmark-chip.chip-enter { animation: chipIn 180ms var(--ease-out) backwards; }
+    .spinning { animation: spinOnce 320ms var(--ease-out); }
+    .star-pop { animation: starPop 210ms var(--ease-spring); }
+
+    .icon-btn, .omni-icon-btn, .new-tab-btn, .bookmark-chip, .omni-engine-pill, .tab-close, .tab-mute-btn {
+      transition: background 120ms ease, color 120ms ease, border-color 120ms ease, border-radius 150ms var(--ease-out), transform 120ms var(--ease-out), opacity 120ms ease;
+    }
+
+    .icon-btn:active:not(:disabled),
+    .omni-icon-btn:active,
+    .new-tab-btn:active,
+    .omni-engine-pill:active,
+    .tab-close:active {
+      transform: scale(0.91);
+    }
+
+    .bookmark-chip:active {
+      transform: scale(0.96);
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .bookmark-chip:hover {
+        transform: translateY(-0.5px);
+      }
+      .new-tab-btn:hover svg {
+        transform: rotate(90deg);
+        transition: transform 200ms var(--ease-out);
+      }
+    }
 
     .loading-bar {
       position: absolute;
@@ -643,13 +713,32 @@
       width: 0%;
       background: var(--accent);
       opacity: 0;
-      transition: width 0.2s ease, opacity 0.15s ease;
+      overflow: hidden;
+      transition: width 260ms var(--ease-out), opacity 180ms ease;
       z-index: 100;
+    }
+
+    .loading-bar::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.65), transparent);
+      animation: loadingShimmer 1.1s linear infinite;
     }
 
     .loading-bar.active {
       opacity: 1;
-      width: 82%;
+      width: 84%;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .tab.tab-new, .bookmark-chip.chip-enter, .spinning, .star-pop, .loading-bar::after {
+        animation: none !important;
+      }
+      .tab, .icon-btn, .omni-icon-btn, .bookmark-chip, .omni-engine-bar {
+        transition-duration: 0.01ms !important;
+      }
     }
   </style>
 </head>
@@ -1042,7 +1131,6 @@
           + (isNew ? ' tab-new' : '')
           + (tab.isPinned ? ' pinned' : '')
           + (tab.isSleeping ? ' sleeping' : '');
-        el.draggable = !tab.isPinned;
 
         const iconHtml = getSiteIconHtml(tab.url, tab.title);
         const titleText = tab.title || (tab.url === 'ferro://newtab' ? 'Новая вкладка' : (tab.url || 'Новая вкладка'));
@@ -1059,10 +1147,140 @@
           `;
         }
 
+        const animateAndCloseTab = (tid) => {
+          if (state.tabs.length <= 1) {
+            sendIpc({ action: 'close_tab', id: tid });
+            return;
+          }
+          el.classList.add('tab-closing');
+          setTimeout(() => sendIpc({ action: 'close_tab', id: tid }), 125);
+        };
+
+        // Prevent text selection on mousedown while keeping pointer gestures responsive
+        el.addEventListener('mousedown', (e) => {
+          if (e.button === 0 && !e.target.closest('.tab-close') && !e.target.closest('.tab-mute-btn')) {
+            e.preventDefault();
+          }
+        });
+
+        let dragMoved = false;
+
+        // 1:1 Direct Manipulation Pointer Tab Reordering + FLIP Sibling Glide
+        if (!tab.isPinned) {
+          let pointerDown = false;
+          let activePointerId = null;
+          let dragOriginX = 0;
+
+          el.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0 || e.target.closest('.tab-close') || e.target.closest('.tab-mute-btn')) return;
+            pointerDown = true;
+            dragMoved = false;
+            activePointerId = e.pointerId;
+            dragOriginX = e.clientX;
+          });
+
+          el.addEventListener('pointermove', (e) => {
+            if (!pointerDown || e.pointerId !== activePointerId) return;
+            const rawDx = e.clientX - dragOriginX;
+            if (!dragMoved) {
+              if (Math.abs(rawDx) < 5) return;
+              dragMoved = true;
+              try { el.setPointerCapture(e.pointerId); } catch (_) {}
+              el.classList.add('dragging');
+              if (state.activeTabId !== tab.id) {
+                sendIpc({ action: 'switch_tab', id: tab.id });
+              }
+            }
+
+            const dx = e.clientX - dragOriginX;
+            el.style.transform = `translate3d(${dx}px, 0, 0) scale(1.02)`;
+
+            const myRect = el.getBoundingClientRect();
+            const myCenter = myRect.left + myRect.width / 2;
+            const siblings = Array.from(tabsContainer.querySelectorAll('.tab:not(.pinned)'));
+            const myIdx = siblings.indexOf(el);
+
+            for (let i = 0; i < siblings.length; i++) {
+              if (i === myIdx) continue;
+              const sib = siblings[i];
+              const sibRect = sib.getBoundingClientRect();
+              const sibMid = sibRect.left + sibRect.width / 2;
+              const shouldSwap = (i < myIdx && myCenter < sibMid) || (i > myIdx && myCenter > sibMid);
+              if (shouldSwap) {
+                const prevLefts = new Map();
+                siblings.forEach(s => {
+                  if (s !== el) prevLefts.set(s, s.getBoundingClientRect().left);
+                });
+                const beforeMyLayoutLeft = el.offsetLeft;
+
+                if (i < myIdx) {
+                  tabsContainer.insertBefore(el, sib);
+                } else {
+                  tabsContainer.insertBefore(el, sib.nextSibling);
+                }
+
+                const afterMyLayoutLeft = el.offsetLeft;
+                dragOriginX += (afterMyLayoutLeft - beforeMyLayoutLeft);
+                const adjustedDx = e.clientX - dragOriginX;
+                el.style.transform = `translate3d(${adjustedDx}px, 0, 0) scale(1.02)`;
+
+                // FLIP animate displaced sibling tabs smoothly
+                siblings.forEach(s => {
+                  if (s === el) return;
+                  const oldL = prevLefts.get(s);
+                  const newL = s.getBoundingClientRect().left;
+                  const delta = oldL - newL;
+                  if (Math.abs(delta) > 0.5) {
+                    s.style.transition = 'none';
+                    s.style.transform = `translate3d(${delta}px, 0, 0)`;
+                    requestAnimationFrame(() => {
+                      s.style.transition = 'transform 180ms cubic-bezier(0.23, 1, 0.32, 1)';
+                      s.style.transform = 'translate3d(0, 0, 0)';
+                    });
+                  }
+                });
+                break;
+              }
+            }
+          });
+
+          const finishDrag = (e) => {
+            if (!pointerDown || (e && e.pointerId !== activePointerId)) return;
+            pointerDown = false;
+            try { el.releasePointerCapture(activePointerId); } catch (_) {}
+            activePointerId = null;
+
+            if (dragMoved) {
+              el.classList.remove('dragging');
+              el.style.transition = 'transform 170ms cubic-bezier(0.23, 1, 0.32, 1)';
+              el.style.transform = 'translate3d(0, 0, 0)';
+              setTimeout(() => { el.style.transform = ''; el.style.transition = ''; }, 180);
+
+              // Commit new tab order to state.tabs and Rust backend
+              const domIds = Array.from(tabsContainer.querySelectorAll('.tab')).map(node => Number(node.dataset.tabId));
+              const mapById = new Map(state.tabs.map(t => [t.id, t]));
+              const nextTabs = domIds.map(id => mapById.get(id)).filter(Boolean);
+              if (nextTabs.length === state.tabs.length) {
+                state.tabs = nextTabs;
+                sendIpc({ action: 'reorder_tabs', url: domIds.join(',') });
+              }
+              setTimeout(() => { dragMoved = false; }, 30);
+            }
+          };
+
+          el.addEventListener('pointerup', finishDrag);
+          el.addEventListener('pointercancel', finishDrag);
+        }
+
         el.addEventListener('click', (e) => {
+          if (dragMoved) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (e.target.closest('.tab-close')) {
             e.stopPropagation();
-            sendIpc({ action: 'close_tab', id: tab.id });
+            animateAndCloseTab(tab.id);
           } else if (e.target.closest('.tab-mute-btn')) {
             e.stopPropagation();
             sendIpc({ action: 'toggle_mute_tab', id: tab.id });
@@ -1075,47 +1293,20 @@
           if (e.button === 1 && !tab.isPinned) {
             e.preventDefault();
             e.stopPropagation();
-            sendIpc({ action: 'close_tab', id: tab.id });
+            animateAndCloseTab(tab.id);
           }
         });
 
         el.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          sendIpc({ action: 'tab_context_menu', id: tab.id, url: tab.url });
+          sendIpc({
+            action: 'tab_context_menu',
+            id: tab.id,
+            url: tab.url,
+            pass: `${Math.round(e.clientX)},${Math.round(e.clientY)}`
+          });
         });
-
-        // Drag-and-drop tab reordering
-        if (!tab.isPinned) {
-          el.addEventListener('dragstart', (e) => {
-            state.draggedTabId = tab.id;
-            e.dataTransfer.effectAllowed = 'move';
-          });
-          el.addEventListener('dragover', (e) => {
-            if (state.draggedTabId && state.draggedTabId !== tab.id) {
-              e.preventDefault();
-              el.classList.add('drag-over');
-            }
-          });
-          el.addEventListener('dragleave', () => {
-            el.classList.remove('drag-over');
-          });
-          el.addEventListener('drop', (e) => {
-            e.preventDefault();
-            el.classList.remove('drag-over');
-            const fromId = state.draggedTabId;
-            state.draggedTabId = null;
-            if (!fromId || fromId === tab.id) return;
-            const fromIdx = state.tabs.findIndex(t => t.id === fromId);
-            const toIdx = state.tabs.findIndex(t => t.id === tab.id);
-            if (fromIdx >= 0 && toIdx >= 0) {
-              const [moved] = state.tabs.splice(fromIdx, 1);
-              state.tabs.splice(toIdx, 0, moved);
-              renderTabs();
-              sendIpc({ action: 'reorder_tabs', url: state.tabs.map(t => t.id).join(',') });
-            }
-          });
-        }
 
         tabsContainer.appendChild(el);
         if (isActive && shouldScrollToActive) {
@@ -1127,6 +1318,7 @@
       state.newTabId = null;
     }
 
+    let bookmarksAnimatedOnce = false;
     function renderBookmarks() {
       bookmarksBar.innerHTML = '';
       if (!state.bookmarks || state.bookmarks.length === 0) {
@@ -1134,9 +1326,16 @@
         return;
       }
 
-      state.bookmarks.forEach(bm => {
+      const animateStagger = !bookmarksAnimatedOnce;
+      bookmarksAnimatedOnce = true;
+
+      state.bookmarks.forEach((bm, idx) => {
         const btn = document.createElement('button');
-        btn.className = 'bookmark-chip';
+        btn.type = 'button';
+        btn.className = 'bookmark-chip' + (animateStagger ? ' chip-enter' : '');
+        if (animateStagger) {
+          btn.style.animationDelay = `${Math.min(idx * 25, 220)}ms`;
+        }
         btn.title = `${bm.title}\n${bm.url}`;
         const iconHtml = getSiteIconHtml(bm.url, bm.title);
         btn.innerHTML = `
@@ -1155,7 +1354,12 @@
         btn.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           e.stopPropagation();
-          sendIpc({ action: 'bookmark_context_menu', url: bm.url, title: bm.title });
+          sendIpc({
+            action: 'bookmark_context_menu',
+            url: bm.url,
+            title: bm.title,
+            pass: `${Math.round(e.clientX)},${Math.round(e.clientY)}`
+          });
         });
         bookmarksBar.appendChild(btn);
       });
@@ -1521,7 +1725,11 @@
 
     document.getElementById('menuBtn').addEventListener('click', (e) => {
       e.stopPropagation();
-      sendIpc({ action: 'open_menu' });
+      const r = e.currentTarget.getBoundingClientRect();
+      sendIpc({
+        action: 'open_menu',
+        pass: `${Math.round(r.left + r.width / 2)},${Math.round(r.bottom)}`
+      });
     });
 
     // Suppress default right-click menu on shell background

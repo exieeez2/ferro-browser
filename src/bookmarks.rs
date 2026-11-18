@@ -34,7 +34,7 @@ impl Default for BookmarksData {
                     icon: "R".to_string(),
                 },
                 BookmarkItem {
-                    url: "https://youtube.com".to_string(),
+                    url: "https://www.youtube.com".to_string(),
                     title: "YouTube".to_string(),
                     icon: "Y".to_string(),
                 },

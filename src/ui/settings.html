@@ -198,6 +198,11 @@
       max-width: 880px;
     }
 
+    @keyframes secReveal {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     .section {
       display: none;
       margin-bottom: 28px;
@@ -205,7 +210,15 @@
 
     .section.active, body.searching .section.has-matches {
       display: block;
+      animation: secReveal 200ms cubic-bezier(0.23, 1, 0.32, 1);
     }
+
+    .section.active .panel {
+      animation: secReveal 220ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+    }
+    .section.active .panel:nth-of-type(2) { animation-delay: 35ms; }
+    .section.active .panel:nth-of-type(3) { animation-delay: 70ms; }
+    .section.active .panel:nth-of-type(4) { animation-delay: 105ms; }
 
     .section-header {
       margin-bottom: 16px;
@@ -315,7 +328,15 @@
       height: 14px;
       border-radius: 50%;
       background: var(--text-secondary);
-      transition: transform 0.14s cubic-bezier(0.2, 0, 0, 1), background 0.14s ease;
+      transition: transform 180ms cubic-bezier(0.34, 1.38, 0.64, 1), background 140ms ease;
+    }
+
+    .toggle:active::after {
+      transform: scale(0.9);
+    }
+
+    .toggle.checked:active::after {
+      transform: translateX(18px) scale(0.9);
     }
 
     .toggle.checked {
@@ -571,11 +592,30 @@
       background: var(--bg-base);
       overflow: hidden;
       cursor: pointer;
-      transition: border-color 0.12s ease, background 0.12s ease;
+      transition: border-color 150ms ease, background 150ms ease, transform 160ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 160ms cubic-bezier(0.23, 1, 0.32, 1);
     }
 
-    .preset-card:hover {
-      border-color: var(--border-strong);
+    @media (hover: hover) and (pointer: fine) {
+      .preset-card:hover {
+        border-color: var(--border-strong);
+        transform: translateY(-2px);
+      }
+      .engine-card:hover {
+        transform: translateY(-1px);
+      }
+    }
+
+    .preset-card:active, .engine-card:active, .btn:active, .seg-btn:active, .color-swatch:active {
+      transform: scale(0.96);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .section.active, .section.active .panel {
+        animation: none !important;
+      }
+      .preset-card, .engine-card, .btn, .seg-btn, .toggle::after {
+        transition-duration: 0.01ms !important;
+      }
     }
 
     .preset-card.active {

@@ -85,6 +85,7 @@ struct BrowserState {
     lens_preview: Arc<Mutex<String>>,
     last_lens_result_url: Option<String>,
     spare_tab: Option<PrewarmedTab>,
+    active_popover: Option<gtk::Popover>,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
     tabs: Vec<Tab>,
@@ -269,20 +270,27 @@ fn update_gtk_menu_css(css_provider: &gtk::CssProvider, s: &BrowserSettings) {
         box {{
             background-color: transparent;
         }}
-        menu {{
+        menu, popover, popover.background {{
             background-color: {bg};
+            background-image: none;
             border: 1px solid {border};
             border-radius: {rad}px;
             padding: 4px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
         }}
-        menuitem {{
+        menuitem, .ferro-pop-btn {{
             color: {fg};
+            background-color: transparent;
+            background-image: none;
+            border: none;
+            box-shadow: none;
             font-size: 13px;
             padding: 6px 14px;
             border-radius: {item_rad}px;
         }}
-        menuitem:hover {{
+        menuitem:hover, .ferro-pop-btn:hover {{
             background-color: {hover_bg};
+            background-image: none;
             color: {fg};
         }}
         separator {{
@@ -293,6 +301,90 @@ fn update_gtk_menu_css(css_provider: &gtk::CssProvider, s: &BrowserSettings) {
         "
     );
     let _ = css_provider.load_from_data(css.as_bytes());
+}
+
+enum PopoverEntry {
+    Item(String, Box<dyn Fn() + 'static>),
+    Separator,
+}
+
+fn parse_menu_coords(pass: Option<&str>, default_x: i32, default_y: i32) -> (i32, i32) {
+    if let Some(raw) = pass {
+        if let Some((xs, ys)) = raw.split_once(',') {
+            if let (Ok(x), Ok(y)) = (xs.trim().parse::<i32>(), ys.trim().parse::<i32>()) {
+                return (x, y);
+            }
+        }
+    }
+    (default_x, default_y)
+}
+
+fn show_top_popover(
+    state_rc: &Rc<RefCell<BrowserState>>,
+    raw_x: i32,
+    raw_y: i32,
+    entries: Vec<PopoverEntry>,
+) {
+    let top_box = {
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            if let Some(old) = st.active_popover.take() {
+                old.popdown();
+            }
+            st.top_box.clone()
+        } else {
+            return;
+        }
+    };
+
+    let alloc = top_box.allocation();
+    let max_x = (alloc.width() - 8).max(12);
+    let max_y = (alloc.height() - 2).max(12);
+    let cx = raw_x.clamp(8, max_x);
+    let cy = raw_y.clamp(8, max_y);
+
+    let popover = gtk::Popover::new(Some(&top_box));
+    popover.set_pointing_to(&gdk::Rectangle::new(cx, cy, 2, 2));
+    popover.set_position(gtk::PositionType::Bottom);
+    popover.set_constrain_to(gtk::PopoverConstraint::Window);
+    popover.set_modal(true);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    vbox.set_margin_top(4);
+    vbox.set_margin_bottom(4);
+    vbox.set_margin_start(4);
+    vbox.set_margin_end(4);
+
+    for entry in entries {
+        match entry {
+            PopoverEntry::Separator => {
+                let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
+                vbox.pack_start(&sep, false, false, 2);
+            }
+            PopoverEntry::Item(label, callback) => {
+                let btn = gtk::Button::new();
+                btn.set_relief(gtk::ReliefStyle::None);
+                btn.set_focus_on_click(false);
+                btn.style_context().add_class("ferro-pop-btn");
+                let lbl = gtk::Label::new(Some(&label));
+                lbl.set_xalign(0.0);
+                btn.add(&lbl);
+                let pop_clone = popover.clone();
+                btn.connect_clicked(move |_| {
+                    pop_clone.popdown();
+                    callback();
+                });
+                vbox.pack_start(&btn, false, false, 0);
+            }
+        }
+    }
+
+    popover.add(&vbox);
+    vbox.show_all();
+
+    if let Ok(mut st) = state_rc.try_borrow_mut() {
+        st.active_popover = Some(popover.clone());
+    }
+    popover.popup();
 }
 
 fn render_source_viewer_html(url: &str, raw_html: &str, s: &BrowserSettings) -> String {
@@ -781,7 +873,13 @@ fn schedule_prewarm_tab(state_rc: &Rc<RefCell<BrowserState>>) {
     });
 }
 
-fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
+fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, raw_target_url: &str) -> u32 {
+    let target_url: &str = match raw_target_url.trim() {
+        "https://youtube.com" | "https://youtube.com/" | "http://youtube.com" | "http://youtube.com/" => {
+            "https://www.youtube.com/"
+        }
+        other => other,
+    };
     // Fast <1ms path: use pre-warmed spare tab when opening ferro://newtab!
     if target_url == "ferro://newtab" {
         let taken = {
@@ -916,8 +1014,8 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         r#"
         try {{ window._ferro_settings = {settings_json}; }} catch(e) {{}}
         (function() {{
-            if (window.location.href.startsWith('ferro://settings')) return;
             function injectDynamicTheme() {{
+                if (window.location.protocol !== 'ferro:' || window.location.href.startsWith('ferro://settings')) return;
                 const id = 'ferro-theme-vars';
                 if (!document.getElementById(id)) {{
                     const root = document.head || document.documentElement;
@@ -1250,7 +1348,6 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         ));
         settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
         settings.set_enable_page_cache(true);
-        settings.set_enable_dns_prefetching(true);
         settings.set_enable_fullscreen(true);
         settings.set_enable_developer_extras(true);
         settings.set_enable_webgl(settings_snapshot.enable_webgl);
@@ -1282,6 +1379,9 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     let state_weak: Weak<RefCell<BrowserState>> = Rc::downgrade(state_rc);
     let tab_id_copy = tab_id;
     inner_wv.connect_load_changed(move |wv, event| {
+        if matches!(event, LoadEvent::Committed | LoadEvent::Finished) {
+            wv.queue_draw();
+        }
         if let Some(state_rc) = state_weak.upgrade() {
             let is_loading = matches!(event, LoadEvent::Started | LoadEvent::Redirected);
             let can_back = wv.can_go_back();
@@ -1710,20 +1810,48 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "navigate" => {
-            let active = {
-                if let Ok(state) = state_rc.try_borrow() {
-                    state.active_tab_id.and_then(|id| {
-                        state.tabs.iter().find(|t| t.id == id).map(|t| (t.webview.clone(), t.inner.clone()))
-                    })
-                } else {
-                    None
+            if let Some(raw_url) = msg.url {
+                let url = match raw_url.trim() {
+                    "https://youtube.com" | "https://youtube.com/" | "http://youtube.com" | "http://youtube.com/" => {
+                        "https://www.youtube.com/".to_string()
+                    }
+                    other => other.to_string(),
+                };
+                let mut target_tab_id = None;
+                let active = {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        if let Some(id) = state.active_tab_id {
+                            if let Some(t) = state.tabs.iter_mut().find(|t| t.id == id) {
+                                t.url = url.clone();
+                                t.is_loading = !url.starts_with("ferro://");
+                                t.sleeping_url = None;
+                                target_tab_id = Some(id);
+                                Some((t.webview.clone(), t.inner.clone(), t.container.clone(), state.stack.clone()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some(tid) = target_tab_id {
+                    sync_tab_update_to_ui(state_rc, tid);
                 }
-            };
-            if let (Some(url), Some((wry_wv, inner))) = (msg.url, active) {
-                if url.starts_with("ferro://") {
-                    let _ = wry_wv.load_url(&url);
-                } else {
-                    inner.load_uri(&url);
+                if let Some((wry_wv, inner, container, stack)) = active {
+                    glib::idle_add_local_once(move || {
+                        container.show_all();
+                        if let Some(tid) = target_tab_id {
+                            stack.set_visible_child_name(&format!("tab_{}", tid));
+                        }
+                        let _ = wry_wv.load_url(&url);
+                        if !url.starts_with("ferro://") {
+                            inner.grab_focus();
+                        }
+                        inner.queue_draw();
+                    });
                 }
             }
         }
@@ -2598,151 +2726,150 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         "tab_context_menu" => {
             if let Some(tab_id) = msg.id {
                 let tab_url = msg.url.unwrap_or_else(|| "ferro://newtab".to_string());
+                let (mx, my) = parse_menu_coords(msg.pass.as_deref(), 120, 32);
                 let state_weak = Rc::downgrade(state_rc);
                 glib::idle_add_local_once(move || {
                     if let Some(state_rc) = state_weak.upgrade() {
-                        let (is_pinned, is_muted) = state_rc
+                        let (is_pinned, is_muted, is_active) = state_rc
                             .try_borrow()
                             .ok()
                             .and_then(|st| {
                                 st.tabs
                                     .iter()
                                     .find(|t| t.id == tab_id)
-                                    .map(|t| (t.is_pinned, t.is_muted))
+                                    .map(|t| (t.is_pinned, t.is_muted, st.active_tab_id == Some(tab_id)))
                             })
-                            .unwrap_or((false, false));
+                            .unwrap_or((false, false, false));
 
-                        let menu = gtk::Menu::new();
+                        let mut entries: Vec<PopoverEntry> = Vec::new();
 
-                        let item_new = gtk::MenuItem::with_label("Новая вкладка                   Ctrl+T");
-                        let s_rc = state_rc.clone();
-                        item_new.connect_activate(move |_| {
-                            create_tab(&s_rc, "ferro://newtab");
-                        });
-                        menu.append(&item_new);
-
-                        let item_reload = gtk::MenuItem::with_label("Обновить вкладку            Ctrl+R");
-                        let s_rc = state_rc.clone();
-                        item_reload.connect_activate(move |_| {
-                            if let Ok(state) = s_rc.try_borrow() {
-                                if let Some(t) = state.tabs.iter().find(|t| t.id == tab_id) {
-                                    t.inner.reload();
-                                }
-                            }
-                        });
-                        menu.append(&item_reload);
-
-                        let item_dup = gtk::MenuItem::with_label("Дублировать вкладку");
-                        let s_rc = state_rc.clone();
-                        let dup_url = tab_url.clone();
-                        item_dup.connect_activate(move |_| {
-                            create_tab(&s_rc, &dup_url);
-                        });
-                        menu.append(&item_dup);
-
-                        let pin_lbl = if is_pinned {
-                            "Открепить вкладку"
-                        } else {
-                            "Закрепить вкладку"
-                        };
-                        let item_pin = gtk::MenuItem::with_label(pin_lbl);
-                        let s_rc = state_rc.clone();
-                        item_pin.connect_activate(move |_| {
-                            handle_ipc(&s_rc, IpcMessage {
-                                action: "toggle_pin_tab".to_string(),
-                                url: None,
-                                id: Some(tab_id),
-                                title: None,
-                                pass: None,
-                                settings: None,
-                            });
-                        });
-                        menu.append(&item_pin);
-
-                        let mute_lbl = if is_muted {
-                            "Включить звук вкладки"
-                        } else {
-                            "Выключить звук вкладки"
-                        };
-                        let item_mute = gtk::MenuItem::with_label(mute_lbl);
-                        let s_rc = state_rc.clone();
-                        item_mute.connect_activate(move |_| {
-                            handle_ipc(&s_rc, IpcMessage {
-                                action: "toggle_mute_tab".to_string(),
-                                url: None,
-                                id: Some(tab_id),
-                                title: None,
-                                pass: None,
-                                settings: None,
-                            });
-                        });
-                        menu.append(&item_mute);
-
-                        let is_active = state_rc
-                            .try_borrow()
-                            .ok()
-                            .map(|st| st.active_tab_id == Some(tab_id))
-                            .unwrap_or(false);
-                        if !is_active {
-                            let item_sleep = gtk::MenuItem::with_label("Усыпить вкладку (освободить ОЗУ)");
+                        {
                             let s_rc = state_rc.clone();
-                            item_sleep.connect_activate(move |_| {
-                                handle_ipc(&s_rc, IpcMessage {
-                                    action: "sleep_tab".to_string(),
-                                    url: None,
-                                    id: Some(tab_id),
-                                    title: None,
-                                    pass: None,
-                                    settings: None,
-                                });
-                            });
-                            menu.append(&item_sleep);
+                            entries.push(PopoverEntry::Item(
+                                "Новая вкладка                   Ctrl+T".to_string(),
+                                Box::new(move || { create_tab(&s_rc, "ferro://newtab"); }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Обновить вкладку            Ctrl+R".to_string(),
+                                Box::new(move || {
+                                    if let Ok(state) = s_rc.try_borrow() {
+                                        if let Some(t) = state.tabs.iter().find(|t| t.id == tab_id) {
+                                            t.inner.reload();
+                                        }
+                                    }
+                                }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            let dup_url = tab_url.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Дублировать вкладку".to_string(),
+                                Box::new(move || { create_tab(&s_rc, &dup_url); }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            let pin_lbl = if is_pinned { "Открепить вкладку" } else { "Закрепить вкладку" };
+                            entries.push(PopoverEntry::Item(
+                                pin_lbl.to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "toggle_pin_tab".to_string(),
+                                        url: None,
+                                        id: Some(tab_id),
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            let mute_lbl = if is_muted { "Включить звук вкладки" } else { "Выключить звук вкладки" };
+                            entries.push(PopoverEntry::Item(
+                                mute_lbl.to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "toggle_mute_tab".to_string(),
+                                        url: None,
+                                        id: Some(tab_id),
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
+                            ));
+                        }
+                        if !is_active {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Усыпить вкладку (освободить ОЗУ)".to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "sleep_tab".to_string(),
+                                        url: None,
+                                        id: Some(tab_id),
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
+                            ));
                         }
 
-                        menu.append(&gtk::SeparatorMenuItem::new());
+                        entries.push(PopoverEntry::Separator);
 
-                        let item_close_right = gtk::MenuItem::with_label("Закрыть вкладки справа");
-                        let s_rc = state_rc.clone();
-                        item_close_right.connect_activate(move |_| {
-                            handle_ipc(&s_rc, IpcMessage {
-                                action: "close_tabs_right".to_string(),
-                                url: None,
-                                id: Some(tab_id),
-                                title: None,
-                                pass: None,
-                                settings: None,
-                            });
-                        });
-                        menu.append(&item_close_right);
+                        {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Закрыть вкладки справа".to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "close_tabs_right".to_string(),
+                                        url: None,
+                                        id: Some(tab_id),
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Закрыть другие вкладки".to_string(),
+                                Box::new(move || {
+                                    let other_ids: Vec<u32> = s_rc
+                                        .try_borrow()
+                                        .map(|st| {
+                                            st.tabs
+                                                .iter()
+                                                .filter(|t| t.id != tab_id && !t.is_pinned)
+                                                .map(|t| t.id)
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    for oid in other_ids {
+                                        close_tab(&s_rc, oid);
+                                    }
+                                }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Закрыть вкладку              Ctrl+W".to_string(),
+                                Box::new(move || { close_tab(&s_rc, tab_id); }),
+                            ));
+                        }
 
-                        let item_close_others = gtk::MenuItem::with_label("Закрыть другие вкладки");
-                        let s_rc = state_rc.clone();
-                        item_close_others.connect_activate(move |_| {
-                            let other_ids: Vec<u32> = s_rc
-                                .try_borrow()
-                                .map(|st| {
-                                    st.tabs
-                                        .iter()
-                                        .filter(|t| t.id != tab_id && !t.is_pinned)
-                                        .map(|t| t.id)
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            for oid in other_ids {
-                                close_tab(&s_rc, oid);
-                            }
-                        });
-                        menu.append(&item_close_others);
-
-                        let item_close = gtk::MenuItem::with_label("Закрыть вкладку              Ctrl+W");
-                        let s_rc = state_rc.clone();
-                        item_close.connect_activate(move |_| {
-                            close_tab(&s_rc, tab_id);
-                        });
-                        menu.append(&item_close);
-
-                        menu.show_all();
-                        menu.popup_easy(3, gtk::current_event_time());
+                        show_top_popover(&state_rc, mx, my, entries);
                     }
                 });
             }
@@ -2750,50 +2877,63 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         "bookmark_context_menu" => {
             if let Some(bm_url) = msg.url {
                 let bm_title = msg.title.unwrap_or_else(|| bm_url.clone());
+                let (mx, my) = parse_menu_coords(msg.pass.as_deref(), 80, 96);
                 let state_weak = Rc::downgrade(state_rc);
                 glib::idle_add_local_once(move || {
                     if let Some(state_rc) = state_weak.upgrade() {
-                        let menu = gtk::Menu::new();
+                        let mut entries: Vec<PopoverEntry> = Vec::new();
+                        {
+                            let s_rc = state_rc.clone();
+                            let u1 = bm_url.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Открыть".to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "navigate".to_string(),
+                                        url: Some(u1.clone()),
+                                        id: None,
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
+                            ));
+                        }
+                        {
+                            let s_rc = state_rc.clone();
+                            let u2 = bm_url.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Открыть в новой вкладке".to_string(),
+                                Box::new(move || { create_tab(&s_rc, &u2); }),
+                            ));
+                        }
+                        {
+                            let u_copy = bm_url.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Копировать адрес закладки".to_string(),
+                                Box::new(move || {
+                                    let cb = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+                                    cb.set_text(&u_copy);
+                                }),
+                            ));
+                        }
+                        entries.push(PopoverEntry::Separator);
+                        {
+                            let s_rc = state_rc.clone();
+                            let u3 = bm_url.clone();
+                            let t3 = bm_title.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Удалить из закладок".to_string(),
+                                Box::new(move || {
+                                    if let Ok(mut state) = s_rc.try_borrow_mut() {
+                                        state.bookmarks.toggle(&u3, &t3);
+                                    }
+                                    sync_bookmarks_to_ui(&s_rc);
+                                }),
+                            ));
+                        }
 
-                        let item_open = gtk::MenuItem::with_label("Открыть");
-                        let s_rc = state_rc.clone();
-                        let u1 = bm_url.clone();
-                        item_open.connect_activate(move |_| {
-                            handle_ipc(&s_rc, IpcMessage {
-                                action: "navigate".to_string(),
-                                url: Some(u1.clone()),
-                                id: None,
-                                title: None,
-                                pass: None,
-                                settings: None,
-                            });
-                        });
-                        menu.append(&item_open);
-
-                        let item_new_tab = gtk::MenuItem::with_label("Открыть в новой вкладке");
-                        let s_rc = state_rc.clone();
-                        let u2 = bm_url.clone();
-                        item_new_tab.connect_activate(move |_| {
-                            create_tab(&s_rc, &u2);
-                        });
-                        menu.append(&item_new_tab);
-
-                        menu.append(&gtk::SeparatorMenuItem::new());
-
-                        let item_del = gtk::MenuItem::with_label("Удалить из закладок");
-                        let s_rc = state_rc.clone();
-                        let u3 = bm_url.clone();
-                        let t3 = bm_title.clone();
-                        item_del.connect_activate(move |_| {
-                            if let Ok(mut state) = s_rc.try_borrow_mut() {
-                                state.bookmarks.toggle(&u3, &t3);
-                            }
-                            sync_bookmarks_to_ui(&s_rc);
-                        });
-                        menu.append(&item_del);
-
-                        menu.show_all();
-                        menu.popup_easy(3, gtk::current_event_time());
+                        show_top_popover(&state_rc, mx, my, entries);
                     }
                 });
             }
@@ -2811,108 +2951,11 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "open_menu" => {
+            let win_w = state_rc.try_borrow().map(|st| st.window.size().0).unwrap_or(1180);
+            let (mx, my) = parse_menu_coords(msg.pass.as_deref(), (win_w - 22).max(20), 68);
             let state_weak = Rc::downgrade(state_rc);
             glib::idle_add_local_once(move || {
                 if let Some(state_rc) = state_weak.upgrade() {
-                    let menu = gtk::Menu::new();
-
-                    let item_new_tab = gtk::MenuItem::with_label("Новая вкладка                   Ctrl+T");
-                    let s_rc = state_rc.clone();
-                    item_new_tab.connect_activate(move |_| {
-                        create_tab(&s_rc, "ferro://newtab");
-                    });
-                    menu.append(&item_new_tab);
-
-                    let item_reopen = gtk::MenuItem::with_label("Восстановить вкладку   Ctrl+Shift+T");
-                    let s_rc = state_rc.clone();
-                    item_reopen.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "reopen_closed_tab".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_reopen);
-
-                    menu.append(&gtk::SeparatorMenuItem::new());
-
-                    let item_history = gtk::MenuItem::with_label("История просмотров         Ctrl+H");
-                    let s_rc = state_rc.clone();
-                    item_history.connect_activate(move |_| {
-                        create_tab(&s_rc, "ferro://history");
-                    });
-                    menu.append(&item_history);
-
-                    let item_downloads = gtk::MenuItem::with_label("Загрузки                             Ctrl+J");
-                    let s_rc = state_rc.clone();
-                    item_downloads.connect_activate(move |_| {
-                        create_tab(&s_rc, "ferro://downloads");
-                    });
-                    menu.append(&item_downloads);
-
-                    let item_passwords = gtk::MenuItem::with_label("Менеджер паролей");
-                    let s_rc = state_rc.clone();
-                    item_passwords.connect_activate(move |_| {
-                        create_tab(&s_rc, "ferro://passwords");
-                    });
-                    menu.append(&item_passwords);
-
-                    let item_side = gtk::MenuItem::with_label("Боковая панель закладок");
-                    let s_rc = state_rc.clone();
-                    item_side.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_side_panel".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_side);
-
-                    menu.append(&gtk::SeparatorMenuItem::new());
-
-                    let item_lens = gtk::MenuItem::with_label("Поиск с Google Объективом");
-                    let s_rc = state_rc.clone();
-                    item_lens.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "open_lens_overlay".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_lens);
-
-                    let item_reader = gtk::MenuItem::with_label("Режим чтения                     Alt+R");
-                    let s_rc = state_rc.clone();
-                    item_reader.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_reader".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_reader);
-
-                    let item_pip = gtk::MenuItem::with_label("Картинка в картинке (PiP)");
-                    let s_rc = state_rc.clone();
-                    item_pip.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_pip".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_pip);
-
-                    let item_qr = gtk::MenuItem::with_label("QR-код страницы");
-                    let s_rc = state_rc.clone();
-                    item_qr.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "show_qr".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_qr);
-
-                    let item_find = gtk::MenuItem::with_label("Найти на странице            Ctrl+F");
-                    let s_rc = state_rc.clone();
-                    item_find.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "open_find".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_find);
-
-                    let item_print = gtk::MenuItem::with_label("Печать / Сохранить PDF   Ctrl+P");
-                    let s_rc = state_rc.clone();
-                    item_print.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "print_page".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_print);
-
-                    let item_shot = gtk::MenuItem::with_label("Снимок экрана");
-                    let s_rc = state_rc.clone();
-                    item_shot.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "take_screenshot".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_shot);
-
-                    menu.append(&gtk::SeparatorMenuItem::new());
-
                     let (ab_label, th_label) = {
                         if let Ok(state) = state_rc.try_borrow() {
                             let ab = if state.adblocker.is_enabled() {
@@ -2931,44 +2974,52 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         }
                     };
 
-                    let item_adblock = gtk::MenuItem::with_label(&ab_label);
-                    let s_rc = state_rc.clone();
-                    item_adblock.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_adblock".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_adblock);
-
-                    let item_theme = gtk::MenuItem::with_label(&th_label);
-                    let s_rc = state_rc.clone();
-                    item_theme.connect_activate(move |_| {
-                        handle_ipc(&s_rc, IpcMessage { action: "toggle_theme".to_string(), url: None, id: None, title: None, pass: None, settings: None });
-                    });
-                    menu.append(&item_theme);
-
-                    menu.show_all();
-
-                    let win_info = {
-                        if let Ok(state) = state_rc.try_borrow() {
-                            let (w, _) = state.window.size();
-                            state.window.window().map(|gw| (gw, w))
-                        } else {
-                            None
-                        }
+                    let ipc_item = |label: &str, act: &'static str| -> PopoverEntry {
+                        let s_rc = state_rc.clone();
+                        PopoverEntry::Item(
+                            label.to_string(),
+                            Box::new(move || {
+                                handle_ipc(&s_rc, IpcMessage {
+                                    action: act.to_string(),
+                                    url: None,
+                                    id: None,
+                                    title: None,
+                                    pass: None,
+                                    settings: None,
+                                });
+                            }),
+                        )
+                    };
+                    let tab_item = |label: &str, url: &'static str| -> PopoverEntry {
+                        let s_rc = state_rc.clone();
+                        PopoverEntry::Item(
+                            label.to_string(),
+                            Box::new(move || { create_tab(&s_rc, url); }),
+                        )
                     };
 
-                    if let Some((gdk_win, win_w)) = win_info {
-                        let menu_x = (win_w - 255).max(10);
-                        let rect = gtk::gdk::Rectangle::new(menu_x, 74, 245, 1);
-                        menu.popup_at_rect(
-                            &gdk_win,
-                            &rect,
-                            gtk::gdk::Gravity::SouthWest,
-                            gtk::gdk::Gravity::NorthWest,
-                            None,
-                        );
-                    } else {
-                        menu.popup_easy(3, gtk::current_event_time());
-                    }
+                    let entries = vec![
+                        tab_item("Новая вкладка                   Ctrl+T", "ferro://newtab"),
+                        ipc_item("Восстановить вкладку   Ctrl+Shift+T", "reopen_closed_tab"),
+                        PopoverEntry::Separator,
+                        tab_item("История просмотров         Ctrl+H", "ferro://history"),
+                        tab_item("Загрузки                             Ctrl+J", "ferro://downloads"),
+                        tab_item("Менеджер паролей", "ferro://passwords"),
+                        ipc_item("Боковая панель закладок", "toggle_side_panel"),
+                        PopoverEntry::Separator,
+                        ipc_item("Поиск с Google Объективом", "open_lens_overlay"),
+                        ipc_item("Режим чтения                     Alt+R", "toggle_reader"),
+                        ipc_item("Картинка в картинке (PiP)", "toggle_pip"),
+                        ipc_item("QR-код страницы", "show_qr"),
+                        ipc_item("Найти на странице            Ctrl+F", "open_find"),
+                        ipc_item("Печать / Сохранить PDF   Ctrl+P", "print_page"),
+                        ipc_item("Снимок экрана", "take_screenshot"),
+                        PopoverEntry::Separator,
+                        ipc_item(&ab_label, "toggle_adblock"),
+                        ipc_item(&th_label, "toggle_theme"),
+                    ];
+
+                    show_top_popover(&state_rc, mx, my, entries);
                 }
             });
         }
@@ -3095,6 +3146,15 @@ fn main() {
         return;
     }
 
+    // Ensure GStreamer uses GL-compatible video decoders in GTK3 WebKitGTK on Wayland
+    // (avoids zero-copy VA-API DMABuf black <video> frames on hybrid Intel+NVIDIA setups)
+    if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
+        std::env::set_var(
+            "GST_PLUGIN_FEATURE_RANK",
+            "vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
+        );
+    }
+
     gtk::init().expect("Не удалось инициализировать GTK");
 
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -3151,6 +3211,8 @@ fn main() {
 
     let hpaned = gtk::Paned::new(gtk::Orientation::Horizontal);
     let stack = gtk::Stack::new();
+    stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+    stack.set_transition_duration(140);
     let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     hpaned.pack1(&stack, true, false);
     hpaned.pack2(&side_box, false, false);
@@ -3196,6 +3258,7 @@ fn main() {
         lens_preview,
         last_lens_result_url: None,
         spare_tab: None,
+        active_popover: None,
         css_provider,
         top_webview: None,
         tabs: Vec::new(),
@@ -3255,7 +3318,7 @@ fn main() {
     let store_dir = AdBlocker::filter_store_dir();
     let store_dir_str = store_dir.to_string_lossy().to_string();
     let stamp_path = store_dir.join("rules.stamp");
-    const FILTER_STAMP: &str = "ferro-webkit-rules-v2";
+    const FILTER_STAMP: &str = "ferro-webkit-rules-v3";
     let stamp_ok = std::fs::read_to_string(&stamp_path)
         .map(|s| s.trim() == FILTER_STAMP)
         .unwrap_or(false);

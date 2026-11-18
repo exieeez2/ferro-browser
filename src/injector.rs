@@ -1,5 +1,5 @@
 pub const ADBLOCK_COSMETIC_CSS: &str = r#"
-/* Ferro AdBlock Cosmetic Element Hiding */
+/* Ferro AdBlock Cosmetic Element Hiding — Strict Ad-Network Selectors Only */
 #cts_test,
 #ad_ctd,
 .textads,
@@ -13,8 +13,6 @@ pub const ADBLOCK_COSMETIC_CSS: &str = r#"
 .ad-zone,
 .ad-space,
 .ad-unit,
-.code-block,
-div[class*="code-block"],
 [class^="__clb-"],
 img[src*="Caution1"],
 img[data-src*="Caution1"],
@@ -31,8 +29,6 @@ img[data-src*="Screenshot_1"],
 img[src*="Screenshot_16"],
 img[data-src*="Screenshot_16"],
 .wp-image-30781,
-[class*="feedback"],
-#feedback,
 .feedback-btn,
 [data-widget_type*="feedback"],
 [class*="fluid-player"],
@@ -49,8 +45,6 @@ img[data-src*="Screenshot_16"],
 [class*="brand_top"],
 [id*="brand_top"],
 .regpro,
-[class*="branding"],
-[id*="branding"],
 [class*="brload"],
 [id*="brload"],
 #trickorlife,
@@ -78,27 +72,12 @@ div[style*="cdn.traffer"],
 [id*="traffer"],
 [class*="traffer"],
 a[href*="traffer"],
-a[href*="parik"],
+a[href*="parik24"],
 a[href*="21wiz"],
-a[href*="1x"],
-a[href*="casino"],
-a[href*="vulkan"],
-a[href*="bet"],
-a[href*="bonus"],
-a[href*="dog"],
+a[href*="1xbet"],
+a[href*="joycasino"],
+a[href*="vavada"],
 a[href*="megaways"],
-a[target="_blank"][style*="position: fixed"],
-a[target="_blank"][style*="position: absolute"][style*="width: 100%"],
-div[style*="z-index: 0"][style*="position: fixed"],
-div[style*="z-index: -1"][style*="position: fixed"],
-#branding,
-.branding,
-#branding-link,
-.branding-link,
-#brand_bg,
-.brand_bg,
-.brand_top,
-#brand_top,
 .b-branding,
 #b-branding,
 .banner-bg,
@@ -138,8 +117,6 @@ div[class*="YandexDirect"],
 [data-ad-slot],
 [data-ad-id],
 [data-ad-format],
-.branding,
-.teaser,
 .teaser-block,
 .popup-ad,
 .clickunder,
@@ -156,7 +133,12 @@ div[class*="YandexDirect"],
 #ad-banner,
 .banner_ad,
 .top-ad,
-.bottom-ad {
+.bottom-ad,
+ytd-ad-slot-renderer,
+ytd-in-feed-ad-layout-renderer,
+ytd-banner-promo-renderer,
+ytd-promoted-sparkles-web-renderer,
+#masthead-ad {
     display: none !important;
     visibility: hidden !important;
     height: 0 !important;
@@ -588,7 +570,6 @@ pub const ADBLOCK_JS: &str = r#"
         "realtime.luckyorange.com",
         "redditevents.reddit.com",
         "redirect.viglink.com",
-        "redirector.googlevideo.com",
         "redirector.skimresources.com",
         "refersion.com",
         "region1.google-analytics.com",
@@ -603,7 +584,6 @@ pub const ADBLOCK_JS: &str = r#"
         "s.clarity.ms",
         "s.innovid.com",
         "s.skimresources.com",
-        "s.youtube.com",
         "samsung-com.112.2o7.net",
         "samsungads.com",
         "samsungsamsungads.com",
@@ -769,38 +749,21 @@ pub const ADBLOCK_JS: &str = r#"
         });
     } catch(e) {}
 
-    // 2. Intercept Script & Iframe element creation to block ad scripts before execution
+    // 2. Intercept Script & Iframe setAttribute('src') for plain string ad URLs ONLY
+    // (Preserves native HTMLScriptElement.prototype.src setter so W3C TrustedScriptURL on YouTube/Google works 100%!)
     try {
         const origCreateElement = document.createElement;
         document.createElement = function(tagName, options) {
             const el = origCreateElement.call(document, tagName, options);
             const tag = (tagName || '').toLowerCase();
-
             if (tag === 'script' || tag === 'iframe') {
                 const origSetAttr = el.setAttribute;
                 el.setAttribute = function(name, value) {
-                    if (name && name.toLowerCase() === 'src' && isAdUrl(value)) {
+                    if (name && name.toLowerCase() === 'src' && typeof value === 'string' && isAdUrl(value)) {
                         return;
                     }
                     return origSetAttr.apply(this, arguments);
                 };
-
-                let originalSrc = '';
-                Object.defineProperty(el, 'src', {
-                    get() { return originalSrc; },
-                    set(val) {
-                        if (isAdUrl(val)) {
-                            originalSrc = '';
-                            if (tag === 'script') {
-                                el.type = 'text/plain';
-                            }
-                        } else {
-                            originalSrc = val;
-                            try { el.setAttribute('src', val); } catch(e){}
-                        }
-                    },
-                    configurable: true
-                });
             }
             return el;
         };
@@ -878,8 +841,6 @@ pub const ADBLOCK_JS: &str = r#"
         '.clickunder',
         '.popunder',
         'div[class*="preroll"]',
-        '[class*="branding"]',
-        '[id*="branding"]',
         '.lp-b__brand',
         '[class*="lp-b__brand"]',
         '.brand_bg',
@@ -899,16 +860,12 @@ pub const ADBLOCK_JS: &str = r#"
         '[id*="traffer"]',
         '[class*="traffer"]',
         'a[href*="traffer"]',
-        'a[href*="parik"]',
+        'a[href*="parik24"]',
         'a[href*="21wiz"]',
-        'a[href*="1x"]',
-        'a[href*="casino"]',
-        'a[href*="vulkan"]',
-        'a[href*="bet"]',
-        'a[href*="dog"]',
+        'a[href*="1xbet"]',
+        'a[href*="joycasino"]',
+        'a[href*="vavada"]',
         'a[href*="megaways"]',
-        '.code-block',
-        '[class*="code-block"]',
         '[class^="__clb-"]',
         'img[src*="Caution1"]',
         'img[data-src*="Caution1"]',
@@ -919,8 +876,6 @@ pub const ADBLOCK_JS: &str = r#"
         'img[src*="Screenshot_16"]',
         'img[data-src*="Screenshot_16"]',
         '.wp-image-30781',
-        '[class*="feedback"]',
-        '#feedback',
         '.feedback-btn',
         '[class*="fluid-player"]',
         '.elementor-element-928b71a',
@@ -929,7 +884,19 @@ pub const ADBLOCK_JS: &str = r#"
         '[data-id="f78181b"]'
     ].join(', ');
 
+    const isYouTubeHost = /(^|\.)(youtube\.com|youtu\.be)$/i.test(window.location.hostname || '');
+
     function cleanAds() {
+        if (isYouTubeHost) {
+            // Safe YouTube ad-skipper: skip video ad if showing, never remove #movie_player or <video>!
+            try {
+                const skipBtn = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
+                if (skipBtn) skipBtn.click();
+                const overlayClose = document.querySelector('.ytp-ad-overlay-close-button');
+                if (overlayClose) overlayClose.click();
+            } catch(e) {}
+            return;
+        }
         try {
             const ads = document.querySelectorAll(AD_SELECTORS);
             for (let i = 0; i < ads.length; i++) {
@@ -958,7 +925,7 @@ pub const ADBLOCK_JS: &str = r#"
             }
 
             // Remove canyoublockit extreme test dummy ad elements
-            const testAds = document.querySelectorAll('.code-block, [class^="__clb-"], img[src*="Caution1"], .wp-image-1133, img[src*="Screenshot_1"], .wp-image-3462, img[src*="Screenshot_16"], .wp-image-30781, #feedback, .feedback-btn, .elementor-element-35203eb, .elementor-element-5c7335d, .elementor-element-928b71a, .elementor-element-f78181b');
+            const testAds = document.querySelectorAll('[class^="__clb-"], img[src*="Caution1"], .wp-image-1133, img[src*="Screenshot_1"], .wp-image-3462, img[src*="Screenshot_16"], .wp-image-30781, .feedback-btn, .elementor-element-35203eb, .elementor-element-5c7335d, .elementor-element-928b71a, .elementor-element-f78181b');
             for (let j = 0; j < testAds.length; j++) {
                 const el = testAds[j];
                 const col = el.closest('.elementor-column, .elementor-element-5c7335d, .elementor-element-bebe1cc, .elementor-element-4881fb9, .elementor-element-e1591ee');
@@ -972,11 +939,12 @@ pub const ADBLOCK_JS: &str = r#"
     }
 
     function cleanBodyBrandingOnce() {
+        if (isYouTubeHost) return;
         try {
             [document.documentElement, document.body].forEach(function(el) {
                 if (!el) return;
                 const bg = (el.style.backgroundImage || '') + ' ' + (window.getComputedStyle(el).backgroundImage || '');
-                if (/traffer|branding|parik|casino|bonus|bet|dog.*house|megaways|JBWheel|advert|banner|1x|AuCordesk|lp-b__brand/i.test(bg)) {
+                if (/traffer|parik24|joycasino|vavada|dog.*house|megaways|JBWheel|AuCordesk|lp-b__brand/i.test(bg)) {
                     el.style.setProperty('background', '#111111', 'important');
                     el.style.setProperty('background-image', 'none', 'important');
                     el.style.setProperty('cursor', 'default', 'important');
@@ -2055,8 +2023,8 @@ pub const CONTEXT_MENU_JS: &str = r##"
         const style = document.createElement('style');
         style.textContent = `
             * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
-            @keyframes ctxFade {
-                from { opacity: 0; transform: scale(0.97) translateY(-3px); }
+            @keyframes ctxPopIn {
+                from { opacity: 0; transform: scale(0.95) translateY(-4px); }
                 to { opacity: 1; transform: scale(1) translateY(0); }
             }
             .ctx-menu {
@@ -2068,12 +2036,16 @@ pub const CONTEXT_MENU_JS: &str = r##"
                 color: ${fg};
                 border: 1px solid ${borderCol};
                 border-radius: ${rad}px;
-                box-shadow: 0 12px 32px rgba(0, 0, 0, ${isLight ? '0.18' : '0.62'});
+                box-shadow: 0 14px 36px rgba(0, 0, 0, ${isLight ? '0.18' : '0.62'});
                 font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 font-size: 13px;
                 padding: 4px 0 5px 0;
-                animation: ctxFade 0.1s cubic-bezier(0.2, 0, 0, 1);
+                transform-origin: var(--ctx-origin, top left);
+                animation: ctxPopIn 160ms cubic-bezier(0.23, 1, 0.32, 1);
                 overflow: hidden;
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .ctx-menu { animation: none; }
             }
             .ctx-nav-bar {
                 display: grid;
@@ -2091,9 +2063,10 @@ pub const CONTEXT_MENU_JS: &str = r##"
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
-                transition: background 0.1s ease;
+                transition: background 120ms ease, transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
             }
             .ctx-nav-btn:hover { background: ${hoverBg}; }
+            .ctx-nav-btn:active { transform: scale(0.92); }
             .ctx-sep {
                 height: 1px;
                 background: ${borderCol};
@@ -2110,9 +2083,10 @@ pub const CONTEXT_MENU_JS: &str = r##"
                 cursor: pointer;
                 color: ${fg};
                 line-height: 1.35;
-                transition: background 0.08s ease;
+                transition: background 110ms ease, transform 110ms cubic-bezier(0.23, 1, 0.32, 1);
             }
             .ctx-item:hover { background: ${hoverBg}; }
+            .ctx-item:active { transform: scale(0.985); }
             .ctx-left {
                 display: flex;
                 align-items: center;
@@ -2204,8 +2178,11 @@ pub const CONTEXT_MENU_JS: &str = r##"
         const rect = menu.getBoundingClientRect();
         let x = e.clientX;
         let y = e.clientY;
-        if (x + rect.width > window.innerWidth - 6) x = Math.max(6, window.innerWidth - rect.width - 6);
-        if (y + rect.height > window.innerHeight - 6) y = Math.max(6, window.innerHeight - rect.height - 6);
+        const flipX = x + rect.width > window.innerWidth - 6;
+        const flipY = y + rect.height > window.innerHeight - 6;
+        if (flipX) x = Math.max(6, window.innerWidth - rect.width - 6);
+        if (flipY) y = Math.max(6, window.innerHeight - rect.height - 6);
+        menu.style.setProperty('--ctx-origin', `${flipY ? 'bottom' : 'top'} ${flipX ? 'right' : 'left'}`);
         menu.style.left = x + 'px';
         menu.style.top = y + 'px';
     }, true);
@@ -2253,6 +2230,10 @@ pub const HOTKEYS_JS: &str = r##"
         shadow.innerHTML = `
             <style>
                 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+                @keyframes findSlideIn {
+                    from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+                    to { opacity: 1; transform: translateY(0) scale(1); }
+                }
                 .bar {
                     display: flex;
                     align-items: center;
@@ -2264,6 +2245,8 @@ pub const HOTKEYS_JS: &str = r##"
                     border: 1px solid ${border};
                     border-radius: ${rad}px;
                     box-shadow: 0 8px 24px rgba(0,0,0,${isLight ? '0.16' : '0.55'});
+                    transform-origin: top right;
+                    animation: findSlideIn 170ms cubic-bezier(0.23, 1, 0.32, 1);
                 }
                 input {
                     width: 195px;
@@ -2544,6 +2527,10 @@ pub const HOTKEYS_JS: &str = r##"
         shadow.innerHTML = `
             <style>
                 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', -apple-system, sans-serif; }
+                @keyframes qrPopIn {
+                    from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+                    to { opacity: 1; transform: translateY(0) scale(1); }
+                }
                 .card {
                     width: 276px;
                     background: #19191e;
@@ -2553,6 +2540,8 @@ pub const HOTKEYS_JS: &str = r##"
                     padding: 16px;
                     box-shadow: 0 14px 36px rgba(0,0,0,0.65);
                     text-align: center;
+                    transform-origin: top right;
+                    animation: qrPopIn 180ms cubic-bezier(0.23, 1, 0.32, 1);
                 }
                 .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
                 .qr-wrap {

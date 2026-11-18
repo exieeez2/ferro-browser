@@ -606,7 +606,6 @@ pub const UBLOCK_CORE_RULES: &str = r#"
 ||realtime.luckyorange.com^
 ||redditevents.reddit.com^
 ||redirect.viglink.com^
-||redirector.googlevideo.com^
 ||redirector.skimresources.com^
 ||refersion.com^
 ||region1.google-analytics.com^
@@ -621,7 +620,6 @@ pub const UBLOCK_CORE_RULES: &str = r#"
 ||s.clarity.ms^
 ||s.innovid.com^
 ||s.skimresources.com^
-||s.youtube.com^
 ||samsung-com.112.2o7.net^
 ||samsungads.com^
 ||samsungsamsungads.com^
@@ -1067,5 +1065,9 @@ mod tests {
         assert!(blocker.should_block_url("https://api.ad.xiaomi.com/fakepage"));
         assert!(!blocker.should_block_url("https://wiki.archlinux.org"));
         assert!(!blocker.should_block_url("https://github.com/rust-lang/rust"));
+        assert!(!blocker.should_block_url("https://youtube.com"));
+        assert!(!blocker.should_block_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(!blocker.should_block_url("https://rr2---sn-4g5edndz.googlevideo.com/videoplayback?expire=1700000000&id=o-abc"));
+        assert!(!blocker.should_block_url("https://s.youtube.com/api/stats/playback"));
     }
 }
