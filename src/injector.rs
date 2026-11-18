@@ -258,6 +258,423 @@ pub const ADBLOCK_JS: &str = r#"
                 };
             }
         } catch (e) {}
+
+        // Native Ferro SponsorBlock Port for YouTube (https://sponsor.ajay.app)
+        (function installFerroSponsorBlock() {
+            if (window._ferro_sb_installed) return;
+            window._ferro_sb_installed = true;
+
+            const SB_CATEGORIES = {
+                sponsor:        { key: 'sb_sponsor',        def: true,  color: '#00d400', label: 'Спонсор' },
+                selfpromo:      { key: 'sb_selfpromo',      def: true,  color: '#ffff00', label: 'Самореклама' },
+                interaction:    { key: 'sb_interaction',    def: true,  color: '#cc00ff', label: 'Напоминание о подписке' },
+                intro:          { key: 'sb_intro',          def: true,  color: '#00ffff', label: 'Заставка / Интро' },
+                outro:          { key: 'sb_outro',          def: true,  color: '#0202ed', label: 'Титры / Аутро' },
+                preview:        { key: 'sb_preview',        def: true,  color: '#008fd6', label: 'Превью / Обзор' },
+                music_offtopic: { key: 'sb_music_offtopic', def: true,  color: '#ff9900', label: 'Немузыкальная часть' },
+                filler:         { key: 'sb_filler',         def: false, color: '#7300ff', label: 'Отступление / Вода' }
+            };
+
+            let currentVideoId = '';
+            let rawSegments = [];
+            let unskippedUuids = new Set();
+            let lastSkipTime = 0;
+            let boundVideoEl = null;
+            let toastTimer = null;
+
+            function isSbEnabled() {
+                const cfg = window._ferro_settings || {};
+                return cfg.sponsorblock_enabled !== false;
+            }
+
+            function isCategoryEnabled(cat) {
+                const meta = SB_CATEGORIES[cat];
+                if (!meta) return false;
+                const cfg = window._ferro_settings || {};
+                if (cfg[meta.key] === undefined) return meta.def;
+                return Boolean(cfg[meta.key]);
+            }
+
+            function getActiveSegments() {
+                if (!isSbEnabled()) return [];
+                return rawSegments.filter(s => {
+                    if (!s || !Array.isArray(s.segment) || s.segment.length < 2) return false;
+                    if (s.actionType && s.actionType !== 'skip' && s.actionType !== 'mute') return false;
+                    return isCategoryEnabled(s.category);
+                });
+            }
+
+            function formatTime(sec) {
+                const s = Math.max(0, Math.floor(sec || 0));
+                const h = Math.floor(s / 3600);
+                const m = Math.floor((s % 3600) / 60);
+                const rem = s % 60;
+                if (h > 0) {
+                    return `${h}:${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+                }
+                return `${m}:${String(rem).padStart(2, '0')}`;
+            }
+
+            function extractYouTubeVideoId() {
+                try {
+                    const u = new URL(window.location.href);
+                    if (u.hostname === 'youtu.be') {
+                        return u.pathname.split('/').filter(Boolean)[0] || '';
+                    }
+                    if (u.pathname === '/watch') {
+                        return u.searchParams.get('v') || '';
+                    }
+                    if (u.pathname.startsWith('/shorts/') || u.pathname.startsWith('/embed/') || u.pathname.startsWith('/live/')) {
+                        const parts = u.pathname.split('/').filter(Boolean);
+                        return parts[1] || '';
+                    }
+                } catch (e) {}
+                return '';
+            }
+
+            function ensureSbStyles() {
+                if (document.getElementById('ferro-sb-style')) return;
+                const root = document.head || document.documentElement;
+                if (!root) return;
+                const st = document.createElement('style');
+                st.id = 'ferro-sb-style';
+                st.textContent = `
+                    #ferro-sb-previewbar {
+                        position: absolute !important;
+                        left: 0 !important;
+                        top: 0 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        padding: 0 !important;
+                        margin: 0 !important;
+                        list-style: none !important;
+                        pointer-events: none !important;
+                        z-index: 42 !important;
+                        overflow: hidden !important;
+                    }
+                    .ferro-sb-seg {
+                        position: absolute !important;
+                        top: 0 !important;
+                        bottom: 0 !important;
+                        height: 100% !important;
+                        min-width: 2px !important;
+                        opacity: 0.86 !important;
+                        pointer-events: auto !important;
+                    }
+                    #ferro-sb-toast {
+                        position: absolute;
+                        right: 16px;
+                        bottom: 66px;
+                        z-index: 2147483640;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        padding: 8px 12px;
+                        background: rgba(16, 17, 22, 0.94);
+                        color: #f4f4f7;
+                        border: 1px solid rgba(255, 255, 255, 0.16);
+                        border-radius: 8px;
+                        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+                        font-family: 'Inter', Roboto, Arial, sans-serif;
+                        font-size: 12.5px;
+                        line-height: 1.3;
+                        pointer-events: auto;
+                        opacity: 0;
+                        transform: translateY(6px);
+                        transition: opacity 150ms ease, transform 150ms ease;
+                    }
+                    #ferro-sb-toast.show {
+                        opacity: 1;
+                        transform: translateY(0);
+                    }
+                    #ferro-sb-toast .sb-dot {
+                        width: 9px;
+                        height: 9px;
+                        border-radius: 50%;
+                        flex-shrink: 0;
+                    }
+                    #ferro-sb-toast button {
+                        height: 24px;
+                        padding: 0 9px;
+                        border-radius: 5px;
+                        border: 1px solid rgba(255, 255, 255, 0.22);
+                        background: rgba(255, 255, 255, 0.10);
+                        color: #ffffff;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                        cursor: pointer;
+                    }
+                    #ferro-sb-toast button:hover {
+                        background: rgba(255, 255, 255, 0.20);
+                    }
+                    #ferro-sb-badge {
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 5px;
+                        height: 24px;
+                        padding: 0 8px;
+                        margin: auto 6px;
+                        border-radius: 6px;
+                        border: 1px solid rgba(0, 212, 0, 0.38);
+                        background: rgba(14, 24, 16, 0.85);
+                        color: #bbf7d0;
+                        font-family: 'Inter', Roboto, sans-serif;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        user-select: none;
+                        vertical-align: middle;
+                    }
+                    #ferro-sb-badge.off {
+                        border-color: rgba(255, 255, 255, 0.18);
+                        background: rgba(24, 24, 28, 0.78);
+                        color: #9ca3af;
+                    }
+                `;
+                root.appendChild(st);
+            }
+
+            function showSkipToast(seg, startSec, endSec) {
+                ensureSbStyles();
+                const player = document.getElementById('movie_player') || document.body;
+                if (!player) return;
+                let toast = document.getElementById('ferro-sb-toast');
+                if (!toast) {
+                    toast = document.createElement('div');
+                    toast.id = 'ferro-sb-toast';
+                    player.appendChild(toast);
+                } else if (toast.parentElement !== player) {
+                    player.appendChild(toast);
+                }
+
+                const meta = SB_CATEGORIES[seg.category] || { color: '#00d400', label: seg.category || 'Сегмент' };
+                const skippedDur = Math.max(1, Math.round(endSec - startSec));
+                toast.innerHTML = `
+                    <span class="sb-dot" style="background:${meta.color};"></span>
+                    <span>SponsorBlock: <b>${meta.label}</b> (${skippedDur} с)</span>
+                    <button type="button" id="ferroSbUnskipBtn">Вернуть</button>
+                `;
+                const unskipBtn = toast.querySelector('#ferroSbUnskipBtn');
+                if (unskipBtn) {
+                    unskipBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (seg.UUID) unskippedUuids.add(seg.UUID);
+                        const v = document.querySelector('#movie_player video, video');
+                        if (v) {
+                            try { v.currentTime = startSec; } catch (_) {}
+                        }
+                        toast.classList.remove('show');
+                    });
+                }
+
+                requestAnimationFrame(() => toast.classList.add('show'));
+                clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => {
+                    if (toast) toast.classList.remove('show');
+                }, 3600);
+            }
+
+            function renderTimelineMarkers() {
+                ensureSbStyles();
+                const oldBar = document.getElementById('ferro-sb-previewbar');
+                const activeSegs = getActiveSegments();
+
+                // Update player badge in .ytp-right-controls
+                const rightCtrls = document.querySelector('#movie_player .ytp-right-controls');
+                if (rightCtrls) {
+                    let badge = document.getElementById('ferro-sb-badge');
+                    if (rawSegments.length > 0) {
+                        if (!badge) {
+                            badge = document.createElement('button');
+                            badge.type = 'button';
+                            badge.id = 'ferro-sb-badge';
+                            badge.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                if (window.ipc) {
+                                    window.ipc.postMessage(JSON.stringify({ action: 'toggle_sponsorblock' }));
+                                } else {
+                                    window._ferro_settings = window._ferro_settings || {};
+                                    window._ferro_settings.sponsorblock_enabled = !isSbEnabled();
+                                    renderTimelineMarkers();
+                                }
+                            });
+                            rightCtrls.insertBefore(badge, rightCtrls.firstChild);
+                        }
+                        const enabled = isSbEnabled();
+                        badge.className = enabled ? '' : 'off';
+                        badge.textContent = enabled ? `SB: ${activeSegs.length}` : 'SB: ВЫКЛ';
+                        const summary = activeSegs.map(s => {
+                            const m = SB_CATEGORIES[s.category] || { label: s.category };
+                            return `${m.label} (${formatTime(s.segment[0])}–${formatTime(s.segment[1])})`;
+                        }).join(', ');
+                        badge.title = enabled
+                            ? `SponsorBlock активен (${activeSegs.length}): ${summary || 'нет активных категорий'}. Нажмите для переключения.`
+                            : 'SponsorBlock отключён. Нажмите для включения.';
+                    } else if (badge) {
+                        badge.remove();
+                    }
+                }
+
+                if (activeSegs.length === 0) {
+                    if (oldBar) oldBar.remove();
+                    return;
+                }
+
+                const vid = document.querySelector('#movie_player video, video');
+                const dur = (vid && Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 0;
+                if (!dur) return;
+
+                const progressBar = document.querySelector('#movie_player .ytp-progress-bar, #movie_player .ytp-progress-list');
+                if (!progressBar) return;
+
+                let bar = oldBar;
+                if (!bar) {
+                    bar = document.createElement('ul');
+                    bar.id = 'ferro-sb-previewbar';
+                }
+                if (bar.parentElement !== progressBar) {
+                    progressBar.appendChild(bar);
+                }
+
+                bar.innerHTML = '';
+                for (let i = 0; i < activeSegs.length; i++) {
+                    const seg = activeSegs[i];
+                    const start = Math.max(0, Number(seg.segment[0]) || 0);
+                    const end = Math.min(dur, Number(seg.segment[1]) || 0);
+                    if (end <= start) continue;
+
+                    const leftPct = Math.max(0, Math.min(100, (start / dur) * 100));
+                    const widthPct = Math.max(0.25, Math.min(100 - leftPct, ((end - start) / dur) * 100));
+                    const meta = SB_CATEGORIES[seg.category] || { color: '#00d400', label: seg.category || 'Сегмент' };
+
+                    const li = document.createElement('li');
+                    li.className = 'ferro-sb-seg';
+                    li.style.left = `${leftPct.toFixed(3)}%`;
+                    li.style.width = `${widthPct.toFixed(3)}%`;
+                    li.style.backgroundColor = meta.color;
+                    li.title = `SponsorBlock: ${meta.label} (${formatTime(start)} – ${formatTime(end)})`;
+                    bar.appendChild(li);
+                }
+            }
+
+            function checkAndSkipCurrentTime(vid) {
+                if (!vid || vid.paused || !isSbEnabled()) return;
+                const player = document.getElementById('movie_player');
+                if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
+                    return;
+                }
+                const activeSegs = getActiveSegments();
+                if (activeSegs.length === 0) return;
+
+                const now = performance.now();
+                if (now - lastSkipTime < 350) return;
+
+                const ct = vid.currentTime;
+                const dur = Number.isFinite(vid.duration) ? vid.duration : 0;
+
+                for (let i = 0; i < activeSegs.length; i++) {
+                    const seg = activeSegs[i];
+                    if (seg.UUID && unskippedUuids.has(seg.UUID)) continue;
+                    const start = Number(seg.segment[0]);
+                    const end = Number(seg.segment[1]);
+                    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+
+                    if (ct >= start && ct < end - 0.25) {
+                        lastSkipTime = now;
+                        const targetTime = (dur > 0 && end >= dur - 0.2) ? Math.max(start, dur - 0.15) : end;
+                        try {
+                            vid.currentTime = targetTime;
+                            showSkipToast(seg, start, end);
+                        } catch (e) {}
+                        break;
+                    }
+                }
+            }
+
+            function bindVideoListeners() {
+                const vid = document.querySelector('#movie_player video, video');
+                if (!vid || vid === boundVideoEl) return;
+                boundVideoEl = vid;
+                vid.addEventListener('timeupdate', () => checkAndSkipCurrentTime(vid), { passive: true });
+                vid.addEventListener('loadedmetadata', () => {
+                    renderTimelineMarkers();
+                    checkAndSkipCurrentTime(vid);
+                }, { passive: true });
+                vid.addEventListener('durationchange', () => renderTimelineMarkers(), { passive: true });
+            }
+
+            window._ferroReceiveSponsorBlock = function(videoId, segments) {
+                if (!videoId || videoId !== currentVideoId) return;
+                if (Array.isArray(segments)) {
+                    rawSegments = segments;
+                    renderTimelineMarkers();
+                    const vid = document.querySelector('#movie_player video, video');
+                    if (vid) checkAndSkipCurrentTime(vid);
+                }
+            };
+
+            const origApplySettings = window.applySettings;
+            window.applySettings = function(s) {
+                if (typeof origApplySettings === 'function') {
+                    try { origApplySettings(s); } catch (e) {}
+                }
+                renderTimelineMarkers();
+            };
+
+            function fetchSegmentsForVideo(videoId) {
+                if (!videoId) return;
+                currentVideoId = videoId;
+                rawSegments = [];
+                unskippedUuids.clear();
+                renderTimelineMarkers();
+
+                // 1. Native Rust IPC fetch (cached in Rust & immune to page CSP/adblockers)
+                if (window.ipc) {
+                    try {
+                        window.ipc.postMessage(JSON.stringify({
+                            action: 'fetch_sponsorblock',
+                            url: videoId
+                        }));
+                    } catch (e) {}
+                }
+
+                // 2. Direct CORS fetch to SponsorBlock API in parallel
+                const cats = encodeURIComponent(JSON.stringify(Object.keys(SB_CATEGORIES)));
+                const apiUrl = `https://sponsor.ajay.app/api/skipSegments?videoID=${encodeURIComponent(videoId)}&categories=${cats}`;
+                fetch(apiUrl, { credentials: 'omit' })
+                    .then(r => (r.status === 200 ? r.json() : []))
+                    .then(data => {
+                        if (Array.isArray(data) && currentVideoId === videoId && rawSegments.length === 0) {
+                            window._ferroReceiveSponsorBlock(videoId, data);
+                        }
+                    })
+                    .catch(() => {});
+            }
+
+            function syncVideoNavigation() {
+                bindVideoListeners();
+                const vidId = extractYouTubeVideoId();
+                if (vidId && vidId !== currentVideoId) {
+                    fetchSegmentsForVideo(vidId);
+                } else if (!vidId && currentVideoId) {
+                    currentVideoId = '';
+                    rawSegments = [];
+                    renderTimelineMarkers();
+                } else if (rawSegments.length > 0 && !document.getElementById('ferro-sb-previewbar')) {
+                    renderTimelineMarkers();
+                }
+            }
+
+            window.addEventListener('yt-navigate-finish', syncVideoNavigation, { passive: true });
+            window.addEventListener('yt-page-data-updated', syncVideoNavigation, { passive: true });
+            window.addEventListener('popstate', syncVideoNavigation, { passive: true });
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', syncVideoNavigation, { once: true });
+            } else {
+                syncVideoNavigation();
+            }
+            setInterval(syncVideoNavigation, 1200);
+        })();
     }
 
     if (ferroCfg.adblock_enabled === false) return;

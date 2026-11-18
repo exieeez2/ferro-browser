@@ -18,6 +18,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 fn default_zoom_level() -> u32 {
     100
 }
@@ -68,6 +72,24 @@ pub struct BrowserSettings {
     pub enable_webgl: bool,
     #[serde(default = "default_download_dir")]
     pub download_dir: String,
+    #[serde(default = "default_true")]
+    pub sponsorblock_enabled: bool,
+    #[serde(default = "default_true")]
+    pub sb_sponsor: bool,
+    #[serde(default = "default_true")]
+    pub sb_selfpromo: bool,
+    #[serde(default = "default_true")]
+    pub sb_interaction: bool,
+    #[serde(default = "default_true")]
+    pub sb_intro: bool,
+    #[serde(default = "default_true")]
+    pub sb_outro: bool,
+    #[serde(default = "default_true")]
+    pub sb_preview: bool,
+    #[serde(default = "default_true")]
+    pub sb_music_offtopic: bool,
+    #[serde(default = "default_false")]
+    pub sb_filler: bool,
 }
 
 impl Default for BrowserSettings {
@@ -96,6 +118,15 @@ impl Default for BrowserSettings {
             enable_javascript: true,
             enable_webgl: true,
             download_dir: default_download_dir(),
+            sponsorblock_enabled: true,
+            sb_sponsor: true,
+            sb_selfpromo: true,
+            sb_interaction: true,
+            sb_intro: true,
+            sb_outro: true,
+            sb_preview: true,
+            sb_music_offtopic: true,
+            sb_filler: false,
         }
     }
 }

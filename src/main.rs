@@ -1806,6 +1806,105 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     })
 }
 
+fn fetch_sponsorblock_segments_json(video_id: &str) -> String {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    static SB_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let cache = SB_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get(video_id) {
+            return cached.clone();
+        }
+    }
+
+    let safe_id: String = video_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(20)
+        .collect();
+    if safe_id.is_empty() {
+        return "[]".to_string();
+    }
+
+    let url = format!(
+        "https://sponsor.ajay.app/api/skipSegments?videoID={}&categories=%5B%22sponsor%22,%22selfpromo%22,%22interaction%22,%22intro%22,%22outro%22,%22preview%22,%22music_offtopic%22,%22filler%22%5D",
+        safe_id
+    );
+    let out = std::process::Command::new("curl")
+        .args(["-sS", "--max-time", "5", "-g", &url])
+        .output();
+
+    let json = match out {
+        Ok(res) if res.status.success() => {
+            let body = String::from_utf8_lossy(&res.stdout).trim().to_string();
+            if body.starts_with('[') && body.ends_with(']') {
+                body
+            } else {
+                "[]".to_string()
+            }
+        }
+        _ => "[]".to_string(),
+    };
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() > 256 {
+            guard.clear();
+        }
+        guard.insert(safe_id, json.clone());
+    }
+    json
+}
+
+fn spawn_sponsorblock_fetch(state_rc: &Rc<RefCell<BrowserState>>, video_id: String) {
+    let safe_id: String = video_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(20)
+        .collect();
+    if safe_id.is_empty() {
+        return;
+    }
+
+    let state_weak = Rc::downgrade(state_rc);
+    let id_for_thread = safe_id.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let json = fetch_sponsorblock_segments_json(&id_for_thread);
+        let _ = tx.send(json);
+    });
+
+    glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+        match rx.try_recv() {
+            Ok(segments_json) => {
+                if let Some(s_rc) = state_weak.upgrade() {
+                    let wvs: Vec<Rc<WebView>> = s_rc
+                        .try_borrow()
+                        .map(|st| {
+                            let mut list: Vec<Rc<WebView>> =
+                                st.tabs.iter().map(|t| t.webview.clone()).collect();
+                            if let Some((_, pip_wv, _)) = &st.pip_window {
+                                list.push(pip_wv.clone());
+                            }
+                            list
+                        })
+                        .unwrap_or_default();
+                    let js = format!(
+                        "if (window._ferroReceiveSponsorBlock) window._ferroReceiveSponsorBlock({:?}, {});",
+                        safe_id, segments_json
+                    );
+                    for wv in wvs {
+                        let _ = wv.evaluate_script(&js);
+                    }
+                }
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
 fn spawn_lens_background_search(
     state_rc: &Rc<RefCell<BrowserState>>,
     b64_img: String,
@@ -3204,6 +3303,18 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 }
             }
         }
+        "fetch_sponsorblock" => {
+            if let Some(vid_id) = msg.url {
+                spawn_sponsorblock_fetch(state_rc, vid_id);
+            }
+        }
+        "toggle_sponsorblock" => {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.settings.sponsorblock_enabled = !state.settings.sponsorblock_enabled;
+                let _ = state.settings.save();
+            }
+            broadcast_settings_from_disk();
+        }
         "reorder_tabs" => {
             if let Some(order_str) = msg.url {
                 let ids: Vec<u32> = order_str
@@ -3818,21 +3929,30 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             let state_weak = Rc::downgrade(state_rc);
             glib::idle_add_local_once(move || {
                 if let Some(state_rc) = state_weak.upgrade() {
-                    let (ab_label, th_label) = {
+                    let (ab_label, sb_label, th_label) = {
                         if let Ok(state) = state_rc.try_borrow() {
                             let ab = if state.adblocker.is_enabled() {
                                 format!("Блокировщик рекламы: Вкл ({})", state.adblocker.blocked_count())
                             } else {
                                 "Блокировщик рекламы: Выкл".to_string()
                             };
+                            let sb = if state.settings.sponsorblock_enabled {
+                                "SponsorBlock (YouTube): Вкл".to_string()
+                            } else {
+                                "SponsorBlock (YouTube): Выкл".to_string()
+                            };
                             let th = if state.theme == "light" {
                                 "Тема: Светлая (переключить)".to_string()
                             } else {
                                 "Тема: Тёмная (переключить)".to_string()
                             };
-                            (ab, th)
+                            (ab, sb, th)
                         } else {
-                            ("Блокировщик рекламы".to_string(), "Тема оформления".to_string())
+                            (
+                                "Блокировщик рекламы".to_string(),
+                                "SponsorBlock (YouTube)".to_string(),
+                                "Тема оформления".to_string(),
+                            )
                         }
                     };
 
@@ -3879,6 +3999,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         ipc_item("Снимок экрана", "take_screenshot"),
                         PopoverEntry::Separator,
                         ipc_item(&ab_label, "toggle_adblock"),
+                        ipc_item(&sb_label, "toggle_sponsorblock"),
                         ipc_item(&th_label, "toggle_theme"),
                     ];
 

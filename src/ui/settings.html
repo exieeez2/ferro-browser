@@ -1150,6 +1150,99 @@
         </div>
       </div>
 
+      <div class="group-label">SponsorBlock для YouTube</div>
+      <div class="panel">
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title">Встроенный SponsorBlock (автопропуск интеграций)</div>
+            <div class="row-sub">Автоматический пропуск рекламных вставок блогеров, интро, аутро и просьб о подписке с разметкой на шкале времени.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSponsorBlock" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#00d400;display:inline-block;"></span>Спонсорские интеграции (Sponsor)</div>
+            <div class="row-sub">Оплаченная реклама товаров, сервисов и партнёров внутри видеоролика.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbSponsor" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#ffff00;display:inline-block;"></span>Самореклама и мерч (Selfpromo)</div>
+            <div class="row-sub">Реклама собственного мерча, платных подписок, бусти, патреона и соцсетей автора.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbSelfpromo" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#cc00ff;display:inline-block;"></span>Напоминания о лайке и подписке (Interaction)</div>
+            <div class="row-sub">Призывы подписаться на канал, поставить лайк или нажать на колокольчик.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbInteraction" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#00ffff;display:inline-block;"></span>Вступление / Заставка (Intro)</div>
+            <div class="row-sub">Анимированные заставки и вступительные титры без полезного содержания.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbIntro" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#0202ed;display:inline-block;"></span>Конечные заставки и титры (Outro)</div>
+            <div class="row-sub">Финальные титры и экраны с карточками других видео в конце ролика.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbOutro" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#008fd6;display:inline-block;"></span>Превью / Краткий обзор (Preview)</div>
+            <div class="row-sub">Нарезка моментов («сегодня в выпуске») или пересказ предыдущих серий.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbPreview" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#ff9900;display:inline-block;"></span>Немузыкальная часть в клипах (Music Offtopic)</div>
+            <div class="row-sub">Актерские сценки и диалоги в начале или конце музыкальных видеоклипов.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle checked" id="togSbMusicOfftopic" role="switch"></button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="row-info">
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#7300ff;display:inline-block;"></span>Отступления / Вода (Filler)</div>
+            <div class="row-sub">Необязательные шутки, паузы и отступления от основной темы видео.</div>
+          </div>
+          <div class="row-ctrl">
+            <button type="button" class="toggle" id="togSbFiller" role="switch"></button>
+          </div>
+        </div>
+      </div>
+
       <div class="group-label">Пароли и безопасность сайтов</div>
       <div class="panel">
         <div class="setting-row">
@@ -1365,7 +1458,16 @@
       offer_save_passwords: true,
       enable_javascript: true,
       enable_webgl: true,
-      download_dir: ''
+      download_dir: '',
+      sponsorblock_enabled: true,
+      sb_sponsor: true,
+      sb_selfpromo: true,
+      sb_interaction: true,
+      sb_intro: true,
+      sb_outro: true,
+      sb_preview: true,
+      sb_music_offtopic: true,
+      sb_filler: false
     };
 
     let settings = Object.assign({}, DEFAULT_SETTINGS, window._ferro_settings || {});
@@ -1529,9 +1631,18 @@
       document.getElementById('wpBrightSlider').value = settings.wallpaper_brightness;
       document.getElementById('wpBrightVal').textContent = settings.wallpaper_brightness + '%';
 
-      // Privacy
+      // Privacy & SponsorBlock
       setToggle('togAdblock', settings.adblock_enabled !== false);
       setToggle('togDnt', settings.do_not_track !== false);
+      setToggle('togSponsorBlock', settings.sponsorblock_enabled !== false);
+      setToggle('togSbSponsor', settings.sb_sponsor !== false);
+      setToggle('togSbSelfpromo', settings.sb_selfpromo !== false);
+      setToggle('togSbInteraction', settings.sb_interaction !== false);
+      setToggle('togSbIntro', settings.sb_intro !== false);
+      setToggle('togSbOutro', settings.sb_outro !== false);
+      setToggle('togSbPreview', settings.sb_preview !== false);
+      setToggle('togSbMusicOfftopic', settings.sb_music_offtopic !== false);
+      setToggle('togSbFiller', Boolean(settings.sb_filler));
       setToggle('togOfferPasswords', settings.offer_save_passwords !== false);
       setToggle('togJavascript', settings.enable_javascript !== false);
       setToggle('togWebgl', settings.enable_webgl !== false);
@@ -1617,6 +1728,15 @@
     bindToggle('togNtpShortcuts', 'show_ntp_shortcuts');
     bindToggle('togAdblock', 'adblock_enabled');
     bindToggle('togDnt', 'do_not_track');
+    bindToggle('togSponsorBlock', 'sponsorblock_enabled');
+    bindToggle('togSbSponsor', 'sb_sponsor');
+    bindToggle('togSbSelfpromo', 'sb_selfpromo');
+    bindToggle('togSbInteraction', 'sb_interaction');
+    bindToggle('togSbIntro', 'sb_intro');
+    bindToggle('togSbOutro', 'sb_outro');
+    bindToggle('togSbPreview', 'sb_preview');
+    bindToggle('togSbMusicOfftopic', 'sb_music_offtopic');
+    bindToggle('togSbFiller', 'sb_filler');
     bindToggle('togOfferPasswords', 'offer_save_passwords');
     bindToggle('togJavascript', 'enable_javascript');
     bindToggle('togWebgl', 'enable_webgl');
