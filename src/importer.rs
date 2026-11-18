@@ -33,78 +33,167 @@ impl BrowserImporter {
         DETECTED_CACHE.get_or_init(Self::scan_all_profiles).clone()
     }
 
+    fn fast_sqlite_count(db_path: &Path, sql: &str) -> usize {
+        if !db_path.exists() {
+            return 0;
+        }
+        let uri = format!("file:{}?immutable=1", db_path.to_string_lossy());
+        Command::new("sqlite3")
+            .args(["-readonly", &uri, sql])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().lines().next()?.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+    }
+
+    fn read_chromium_profile_label(root_dir: &Path, sub_name: &str) -> Option<String> {
+        let local_state = root_dir.join("Local State");
+        let raw = fs::read_to_string(local_state).ok()?;
+        let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        val.get("profile")?
+            .get("info_cache")?
+            .get(sub_name)?
+            .get("name")?
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     fn scan_all_profiles() -> Vec<DetectedBrowser> {
         let mut list = Vec::new();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/exieeez"));
 
-        let candidates = [
-            ("chrome", "Google Chrome", home.join(".config/google-chrome/Default")),
-            ("chromium", "Chromium", home.join(".config/chromium/Default")),
-            ("brave", "Brave Browser", home.join(".config/BraveSoftware/Brave-Browser/Default")),
-            ("vivaldi", "Vivaldi", home.join(".config/vivaldi/Default")),
-            ("edge", "Microsoft Edge", home.join(".config/microsoft-edge/Default")),
+        let chromium_roots = [
+            ("chrome", "Google Chrome", home.join(".config/google-chrome")),
+            ("chrome_flatpak", "Google Chrome (Flatpak)", home.join(".var/app/com.google.Chrome/config/google-chrome")),
+            ("chromium", "Chromium", home.join(".config/chromium")),
+            ("chromium_flatpak", "Chromium (Flatpak)", home.join(".var/app/org.chromium.Chromium/config/chromium")),
+            ("ungoogled", "Ungoogled Chromium", home.join(".var/app/io.github.ungoogled_software.ungoogled_chromium/config/chromium")),
+            ("brave", "Brave", home.join(".config/BraveSoftware/Brave-Browser")),
+            ("brave_flatpak", "Brave (Flatpak)", home.join(".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser")),
+            ("vivaldi", "Vivaldi", home.join(".config/vivaldi")),
+            ("edge", "Microsoft Edge", home.join(".config/microsoft-edge")),
+            ("edge_flatpak", "Microsoft Edge (Flatpak)", home.join(".var/app/com.microsoft.Edge/config/microsoft-edge")),
         ];
 
-        for (id, name, path) in candidates {
-            if path.exists() {
-                let bm_path = path.join("Bookmarks");
-                let hist_path = path.join("History");
-                let pass_path = path.join("Login Data");
+        for (base_id, base_name, root_dir) in chromium_roots {
+            if !root_dir.exists() {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&root_dir) else { continue };
+            let mut profile_dirs: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    if !p.is_dir() {
+                        return false;
+                    }
+                    let nm = p.file_name().unwrap_or_default().to_string_lossy();
+                    nm == "Default" || nm.starts_with("Profile ")
+                })
+                .collect();
+
+            profile_dirs.sort();
+
+            for prof_path in profile_dirs {
+                let sub_name = prof_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let bm_path = prof_path.join("Bookmarks");
+                let hist_path = prof_path.join("History");
+                let pass_path = prof_path.join("Login Data");
+
+                if !bm_path.exists() && !hist_path.exists() {
+                    continue;
+                }
 
                 let bm_count = if bm_path.exists() {
                     Self::import_chromium_bookmarks(&bm_path).len()
                 } else {
                     0
                 };
+                let hist_count = Self::fast_sqlite_count(&hist_path, "SELECT MIN(COUNT(*), 1000) FROM urls;");
 
-                let hist_count = if hist_path.exists() {
-                    Self::import_chromium_history(&hist_path).len()
-                } else {
-                    0
+                if bm_count == 0 && hist_count == 0 {
+                    continue;
+                }
+
+                let label = Self::read_chromium_profile_label(&root_dir, &sub_name);
+                let display_name = match (sub_name.as_str(), label) {
+                    ("Default", Some(lbl)) => format!("{} ({})", base_name, lbl),
+                    ("Default", None) => base_name.to_string(),
+                    (_, Some(lbl)) => format!("{} — {} ({})", base_name, lbl, sub_name),
+                    (_, None) => format!("{} ({})", base_name, sub_name),
                 };
 
+                let safe_sub = sub_name.replace(' ', "_").to_lowercase();
                 list.push(DetectedBrowser {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    profile_path: path.to_string_lossy().to_string(),
-                    has_bookmarks: bm_count > 0 || bm_path.exists(),
+                    id: format!("chromium:{}_{}", base_id, safe_sub),
+                    name: display_name,
+                    profile_path: prof_path.to_string_lossy().to_string(),
+                    has_bookmarks: bm_count > 0,
                     bookmarks_count: bm_count,
-                    has_history: hist_count > 0 || hist_path.exists(),
+                    has_history: hist_count > 0,
                     history_count: hist_count,
                     has_passwords: pass_path.exists(),
                 });
             }
         }
 
-        // Detect Firefox profiles
-        let ff_dir = home.join(".mozilla/firefox");
-        if ff_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&ff_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    let name = p.file_name().unwrap_or_default().to_string_lossy();
-                    if p.is_dir() && (name.contains("default") || name.contains("release")) {
-                        let places = p.join("places.sqlite");
-                        let logins = p.join("logins.json");
-                        let (bm_count, hist_count) = if places.exists() {
-                            let (bm, hist) = Self::import_firefox_places(&places);
-                            (bm.len(), hist.len())
-                        } else {
-                            (0, 0)
-                        };
-                        list.push(DetectedBrowser {
-                            id: format!("firefox_{}", name),
-                            name: format!("Mozilla Firefox ({})", name),
-                            profile_path: p.to_string_lossy().to_string(),
-                            has_bookmarks: bm_count > 0 || places.exists(),
-                            bookmarks_count: bm_count,
-                            has_history: hist_count > 0 || places.exists(),
-                            history_count: hist_count,
-                            has_passwords: logins.exists(),
-                        });
-                        break;
-                    }
+        // Scan Firefox / Zen / LibreWolf / Waterfox roots (any folder containing places.sqlite!)
+        let gecko_roots = [
+            ("firefox", "Mozilla Firefox", home.join(".mozilla/firefox")),
+            ("firefox_flatpak", "Firefox (Flatpak)", home.join(".var/app/org.mozilla.firefox/.mozilla/firefox")),
+            ("zen", "Zen Browser", home.join(".config/zen")),
+            ("zen_home", "Zen Browser", home.join(".zen")),
+            ("zen_flatpak", "Zen Browser (Flatpak)", home.join(".var/app/app.zen_browser.zen/.zen")),
+            ("librewolf", "LibreWolf", home.join(".librewolf")),
+            ("librewolf_flatpak", "LibreWolf (Flatpak)", home.join(".var/app/io.gitlab.librewolf-community/.librewolf")),
+            ("waterfox", "Waterfox", home.join(".waterfox")),
+            ("waterfox_flatpak", "Waterfox (Flatpak)", home.join(".var/app/net.waterfox.waterfox/.waterfox")),
+        ];
+
+        for (base_id, base_name, root_dir) in gecko_roots {
+            if !root_dir.exists() {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(&root_dir) else { continue };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
                 }
+                let places = p.join("places.sqlite");
+                if !places.exists() {
+                    continue;
+                }
+                let sub_name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let bm_count = Self::fast_sqlite_count(
+                    &places,
+                    "SELECT MIN(COUNT(*), 500) FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%';",
+                );
+                let hist_count = Self::fast_sqlite_count(
+                    &places,
+                    "SELECT MIN(COUNT(*), 1000) FROM moz_places WHERE visit_count > 0 AND url LIKE 'http%';",
+                );
+                if bm_count == 0 && hist_count == 0 {
+                    continue;
+                }
+
+                let short_prof = sub_name.split('.').nth(1).unwrap_or(&sub_name);
+                list.push(DetectedBrowser {
+                    id: format!("gecko:{}_{}", base_id, sub_name.replace(' ', "_")),
+                    name: format!("{} ({})", base_name, short_prof),
+                    profile_path: p.to_string_lossy().to_string(),
+                    has_bookmarks: bm_count > 0,
+                    bookmarks_count: bm_count,
+                    has_history: hist_count > 0,
+                    history_count: hist_count,
+                    has_passwords: p.join("logins.json").exists(),
+                });
             }
         }
 
@@ -148,18 +237,20 @@ impl BrowserImporter {
             return results;
         }
 
-        // Copy history (+ WAL/SHM if open) to temporary file to avoid database lock
-        let tmp_copy = PathBuf::from("/tmp/ferro_import_chrome_hist.sqlite");
+        let pid = std::process::id();
+        let tmp_copy = std::env::temp_dir().join(format!("ferro_imp_ch_{}.sqlite", pid));
+        let tmp_wal = std::env::temp_dir().join(format!("ferro_imp_ch_{}.sqlite-wal", pid));
+        let tmp_shm = std::env::temp_dir().join(format!("ferro_imp_ch_{}.sqlite-shm", pid));
         let _ = fs::copy(history_file, &tmp_copy);
         let wal = history_file.with_file_name("History-wal");
         if wal.exists() {
-            let _ = fs::copy(&wal, "/tmp/ferro_import_chrome_hist.sqlite-wal");
+            let _ = fs::copy(&wal, &tmp_wal);
         }
 
         let output = Command::new("sqlite3")
             .args([
                 tmp_copy.to_string_lossy().as_ref(),
-                "SELECT url, title FROM urls ORDER BY last_visit_time DESC LIMIT 1000;",
+                "SELECT url, REPLACE(REPLACE(COALESCE(title,''), char(10), ' '), char(13), ' ') FROM urls ORDER BY last_visit_time DESC LIMIT 1000;",
             ])
             .output();
 
@@ -174,8 +265,8 @@ impl BrowserImporter {
             }
         }
         let _ = fs::remove_file(&tmp_copy);
-        let _ = fs::remove_file("/tmp/ferro_import_chrome_hist.sqlite-wal");
-        let _ = fs::remove_file("/tmp/ferro_import_chrome_hist.sqlite-shm");
+        let _ = fs::remove_file(&tmp_wal);
+        let _ = fs::remove_file(&tmp_shm);
         results
     }
 
@@ -186,40 +277,42 @@ impl BrowserImporter {
             return (bookmarks, history);
         }
 
-        let tmp_copy = PathBuf::from("/tmp/ferro_import_ff_places.sqlite");
+        let pid = std::process::id();
+        let tmp_copy = std::env::temp_dir().join(format!("ferro_imp_ff_{}.sqlite", pid));
+        let tmp_wal = std::env::temp_dir().join(format!("ferro_imp_ff_{}.sqlite-wal", pid));
+        let tmp_shm = std::env::temp_dir().join(format!("ferro_imp_ff_{}.sqlite-shm", pid));
         let _ = fs::copy(places_file, &tmp_copy);
         let wal = places_file.with_file_name("places.sqlite-wal");
         let shm = places_file.with_file_name("places.sqlite-shm");
         if wal.exists() {
-            let _ = fs::copy(&wal, "/tmp/ferro_import_ff_places.sqlite-wal");
+            let _ = fs::copy(&wal, &tmp_wal);
         }
         if shm.exists() {
-            let _ = fs::copy(&shm, "/tmp/ferro_import_ff_places.sqlite-shm");
+            let _ = fs::copy(&shm, &tmp_shm);
         }
 
-        // Bookmarks
         if let Ok(out) = Command::new("sqlite3")
             .args([
                 tmp_copy.to_string_lossy().as_ref(),
-                "SELECT b.title, p.url FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url NOT LIKE 'place:%' LIMIT 500;",
+                "SELECT p.url, REPLACE(REPLACE(COALESCE(b.title,''), char(10), ' '), char(13), ' ') FROM moz_bookmarks b JOIN moz_places p ON b.fk = p.id WHERE b.type = 1 AND p.url LIKE 'http%' LIMIT 500;",
             ])
             .output()
         {
             let text = String::from_utf8_lossy(&out.stdout);
             for line in text.lines() {
-                if let Some((title, url)) = line.split_once('|') {
+                if let Some((url, title)) = line.split_once('|') {
                     if url.starts_with("http://") || url.starts_with("https://") {
-                        bookmarks.push((url.to_string(), title.to_string()));
+                        let clean_title = if title.trim().is_empty() { url } else { title.trim() };
+                        bookmarks.push((url.to_string(), clean_title.to_string()));
                     }
                 }
             }
         }
 
-        // History
         if let Ok(out) = Command::new("sqlite3")
             .args([
                 tmp_copy.to_string_lossy().as_ref(),
-                "SELECT url, title FROM moz_places WHERE visit_count > 0 ORDER BY last_visit_date DESC LIMIT 1000;",
+                "SELECT url, REPLACE(REPLACE(COALESCE(title,''), char(10), ' '), char(13), ' ') FROM moz_places WHERE visit_count > 0 AND url LIKE 'http%' ORDER BY last_visit_date DESC LIMIT 1000;",
             ])
             .output()
         {
@@ -234,24 +327,27 @@ impl BrowserImporter {
         }
 
         let _ = fs::remove_file(&tmp_copy);
-        let _ = fs::remove_file("/tmp/ferro_import_ff_places.sqlite-wal");
-        let _ = fs::remove_file("/tmp/ferro_import_ff_places.sqlite-shm");
+        let _ = fs::remove_file(&tmp_wal);
+        let _ = fs::remove_file(&tmp_shm);
         (bookmarks, history)
     }
 
     pub fn execute_import(browser_id: &str) -> ImportResult {
         let all = Self::detect_all();
-        let found = all.iter().find(|b| b.id == browser_id || b.id.starts_with(browser_id));
+        let found = all
+            .iter()
+            .find(|b| b.id == browser_id || b.id.starts_with(browser_id))
+            .or_else(|| all.first());
 
         let mut bookmarks_count = 0;
         let mut history_count = 0;
-        let mut browser_name = "Unknown".to_string();
+        let mut browser_name = "Браузер".to_string();
 
         if let Some(target) = found {
             browser_name = target.name.clone();
             let profile_path = PathBuf::from(&target.profile_path);
 
-            if target.id.starts_with("firefox") {
+            if target.id.starts_with("gecko:") || target.id.starts_with("firefox") {
                 let places = profile_path.join("places.sqlite");
                 let (bm, hist) = Self::import_firefox_places(&places);
                 bookmarks_count = bm.len();
@@ -271,7 +367,6 @@ impl BrowserImporter {
                 }
                 hist_data.save();
             } else {
-                // Chromium-based
                 let bm_file = profile_path.join("Bookmarks");
                 let hist_file = profile_path.join("History");
 
@@ -301,5 +396,25 @@ impl BrowserImporter {
             history_imported: history_count,
             passwords_imported: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_all_profiles() {
+        let t0 = std::time::Instant::now();
+        let browsers = BrowserImporter::detect_all();
+        println!(
+            "[Importer Test] Detected {} browser profiles in {:?}: {:?}",
+            browsers.len(),
+            t0.elapsed(),
+            browsers
+                .iter()
+                .map(|b| format!("{} (bm={}, hist={})", b.name, b.bookmarks_count, b.history_count))
+                .collect::<Vec<_>>()
+        );
     }
 }

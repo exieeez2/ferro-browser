@@ -6,22 +6,26 @@
   <title>Настройки — Ferro</title>
   <style>
     :root {
+      color-scheme: dark;
       --bg-sidebar: #111111;
-      --bg-base: #141414;
-      --bg-panel: #191919;
-      --bg-elevated: #202020;
-      --bg-input: #121212;
-      --bg-hover: #232323;
+      --bg-base: #141416;
+      --bg-panel: #1a1a1e;
+      --bg-elevated: #232329;
+      --bg-input: #121215;
+      --bg-hover: #27272e;
       --accent: #ececec;
       --accent-fg: #111111;
       --accent-subtle: rgba(236, 236, 236, 0.14);
-      --text-primary: #ececec;
-      --text-secondary: #9a9a9a;
-      --text-muted: #666666;
-      --border-hairline: #262626;
-      --border-strong: #383838;
-      --danger: #dc4c4c;
-      --danger-subtle: rgba(220, 76, 76, 0.14);
+      --ui-active: #3b82f6;
+      --ui-active-fg: #ffffff;
+      --ui-active-subtle: rgba(59, 130, 246, 0.16);
+      --text-primary: #ececef;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-hairline: #2a2a32;
+      --border-strong: #3d3d48;
+      --danger: #ef4444;
+      --danger-subtle: rgba(239, 68, 68, 0.14);
       --radius-ctrl: 4px;
       --radius-card: 6px;
       --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -29,20 +33,33 @@
     }
 
     [data-theme="light"], :root[data-theme="light"] {
-      --bg-sidebar: #ececef;
-      --bg-base: #f5f5f7;
+      color-scheme: light;
+      --bg-sidebar: #ebedf0;
+      --bg-base: #f5f6f8;
       --bg-panel: #ffffff;
-      --bg-elevated: #f0f0f3;
+      --bg-elevated: #eceef2;
       --bg-input: #ffffff;
-      --bg-hover: #e4e4e9;
+      --bg-hover: #e2e5eb;
       --accent: #18181b;
       --accent-fg: #ffffff;
       --accent-subtle: rgba(24, 24, 27, 0.09);
+      --ui-active: #2563eb;
+      --ui-active-fg: #ffffff;
+      --ui-active-subtle: rgba(37, 99, 235, 0.12);
       --text-primary: #18181b;
       --text-secondary: #52525b;
       --text-muted: #71717a;
-      --border-hairline: #dcdce0;
-      --border-strong: #b8b8c0;
+      --border-hairline: #d6d9e0;
+      --border-strong: #b4b9c4;
+    }
+
+    select option {
+      background-color: #1c1c22;
+      color: #ececef;
+    }
+    [data-theme="light"] select option {
+      background-color: #ffffff;
+      color: #18181b;
     }
 
     * {
@@ -156,8 +173,9 @@
     }
 
     .nav-item.active {
-      background: var(--accent-subtle);
-      border-color: var(--border-hairline);
+      background: var(--ui-active-subtle);
+      border-color: var(--ui-active);
+      box-shadow: inset 3px 0 0 var(--ui-active);
       color: var(--text-primary);
       font-weight: 600;
     }
@@ -301,13 +319,13 @@
     }
 
     .toggle.checked {
-      background: var(--accent);
-      border-color: var(--accent);
+      background: var(--ui-active);
+      border-color: var(--ui-active);
     }
 
     .toggle.checked::after {
       transform: translateX(18px);
-      background: var(--accent-fg);
+      background: var(--ui-active-fg);
     }
 
     /* Strict Inputs & Selects */
@@ -315,7 +333,7 @@
       height: 32px;
       padding: 0 10px;
       background: var(--bg-input);
-      border: 1px solid var(--border-hairline);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius-ctrl);
       color: var(--text-primary);
       font-family: var(--font-ui);
@@ -325,7 +343,7 @@
     }
 
     .text-input:focus, .select-input:focus {
-      border-color: var(--accent);
+      border-color: var(--ui-active);
     }
 
     .mono-input {
@@ -359,16 +377,16 @@
     }
 
     .btn-primary {
-      background: var(--accent);
-      color: var(--accent-fg);
-      border-color: var(--accent);
+      background: var(--ui-active);
+      color: var(--ui-active-fg);
+      border-color: var(--ui-active);
       font-weight: 600;
     }
 
     .btn-primary:hover {
-      opacity: 0.9;
-      background: var(--accent);
-      border-color: var(--accent);
+      opacity: 0.92;
+      background: var(--ui-active);
+      border-color: var(--ui-active);
     }
 
     .btn-danger {
@@ -410,9 +428,9 @@
     }
 
     .seg-btn.active {
-      background: var(--bg-panel);
-      color: var(--text-primary);
-      border-color: var(--border-strong);
+      background: var(--ui-active);
+      color: var(--ui-active-fg);
+      border-color: var(--ui-active);
       font-weight: 600;
     }
 
@@ -440,8 +458,8 @@
     }
 
     .engine-card.active {
-      border-color: var(--accent);
-      background: var(--accent-subtle);
+      border: 1.5px solid var(--ui-active);
+      background: var(--ui-active-subtle);
     }
 
     .engine-card-left {
@@ -465,7 +483,7 @@
       height: 28px;
       border-radius: var(--radius-ctrl);
       cursor: pointer;
-      border: 2px solid transparent;
+      border: 1px solid rgba(255,255,255,0.2);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -477,8 +495,16 @@
     }
 
     .color-swatch.active {
-      border-color: var(--text-primary);
-      box-shadow: 0 0 0 1px var(--bg-panel);
+      outline: 2.5px solid var(--ui-active);
+      outline-offset: 2px;
+    }
+
+    .color-swatch.active::after {
+      content: '✓';
+      font-size: 13px;
+      font-weight: 800;
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.85);
     }
 
     .color-picker-input {
@@ -504,21 +530,22 @@
 
     .slider {
       flex: 1;
-      height: 4px;
+      height: 5px;
       -webkit-appearance: none;
-      background: linear-gradient(to right, var(--accent) 0%, var(--accent) var(--p, 0%), var(--border-strong) var(--p, 0%), var(--border-strong) 100%);
-      border-radius: 2px;
+      background: linear-gradient(to right, var(--ui-active) 0%, var(--ui-active) var(--p, 0%), var(--border-strong) var(--p, 0%), var(--border-strong) 100%);
+      border-radius: 3px;
       outline: none;
       cursor: pointer;
     }
 
     .slider::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
+      width: 15px;
+      height: 15px;
       border-radius: 50%;
-      background: var(--accent);
-      border: 2px solid var(--bg-panel);
+      background: var(--ui-active);
+      border: 2px solid #ffffff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.45);
       cursor: pointer;
     }
 
@@ -538,12 +565,13 @@
     }
 
     .preset-card {
-      border: 1px solid var(--border-hairline);
+      position: relative;
+      border: 1.5px solid var(--border-hairline);
       border-radius: var(--radius-ctrl);
       background: var(--bg-base);
       overflow: hidden;
       cursor: pointer;
-      transition: border-color 0.12s ease;
+      transition: border-color 0.12s ease, background 0.12s ease;
     }
 
     .preset-card:hover {
@@ -551,8 +579,27 @@
     }
 
     .preset-card.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
+      border-color: var(--ui-active);
+      background: var(--ui-active-subtle);
+      box-shadow: 0 0 0 1px var(--ui-active);
+    }
+
+    .preset-card.active::after {
+      content: '✓';
+      position: absolute;
+      top: 5px;
+      right: 5px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--ui-active);
+      color: var(--ui-active-fg);
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.45);
     }
 
     .preset-thumb {
@@ -968,20 +1015,20 @@
               <div class="preset-thumb" style="background:#141414; align-items:center; justify-content:center; color:var(--text-muted); font-family:var(--font-mono); font-size:11px;">ВЫКЛ</div>
               <div class="preset-label">Без фона</div>
             </div>
-            <div class="preset-card wp-card" data-wp="forest" data-url="https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=80">
-              <div class="preset-thumb" style="background-image:url('https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="preset-card wp-card" data-wp="forest" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse at 25% 20%, #134e4a 0%, #062c28 50%, #090f14 100%);"></div>
               <div class="preset-label">Северный лес</div>
             </div>
-            <div class="preset-card wp-card" data-wp="cyberpunk" data-url="https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80">
-              <div class="preset-thumb" style="background-image:url('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=260&q=60');"></div>
-              <div class="preset-label">Ночной город</div>
+            <div class="preset-card wp-card" data-wp="cyberpunk" data-url="">
+              <div class="preset-thumb" style="background:linear-gradient(135deg, #3b0764 0%, #7e22ce 42%, #0e7490 100%);"></div>
+              <div class="preset-label">Кибернеон</div>
             </div>
-            <div class="preset-card wp-card" data-wp="nebula" data-url="https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=1920&q=80">
-              <div class="preset-thumb" style="background-image:url('https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="preset-card wp-card" data-wp="nebula" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(circle at 75% 25%, #4c1d95 0%, #1e1b4b 48%, #09090f 100%);"></div>
               <div class="preset-label">Космос</div>
             </div>
-            <div class="preset-card wp-card" data-wp="obsidian" data-url="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1920&q=80">
-              <div class="preset-thumb" style="background-image:url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=260&q=60');"></div>
+            <div class="preset-card wp-card" data-wp="obsidian" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(circle at 30% 25%, #2e2e38 0%, #16161b 60%, #0c0c0e 100%);"></div>
               <div class="preset-label">Обсидиан</div>
             </div>
           </div>
@@ -1271,7 +1318,7 @@
       download_dir: ''
     };
 
-    let settings = Object.assign({}, DEFAULT_SETTINGS);
+    let settings = Object.assign({}, DEFAULT_SETTINGS, window._ferro_settings || {});
     const toast = document.getElementById('toast');
     let toastTimer = null;
 
@@ -1367,11 +1414,19 @@
 
     function applyStateToUi() {
       const isLight = settings.theme_mode === 'light';
-      const effectiveAcc = (isLight && settings.accent_color.toLowerCase() === '#ececec') ? '#18181b' : settings.accent_color;
+      const rawAcc = (settings.accent_color || '#ececec').trim();
+      const isMonoAcc = ['#ececec', '#ffffff', '#141414', '#18181b', '#111111'].includes(rawAcc.toLowerCase());
+      const effectiveAcc = (isLight && rawAcc.toLowerCase() === '#ececec') ? '#18181b' : rawAcc;
+      const uiActive = isMonoAcc ? (isLight ? '#2563eb' : '#3b82f6') : rawAcc;
+      const uiActiveFg = isLightHex(uiActive) ? '#111111' : '#ffffff';
+
       document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
       document.documentElement.style.setProperty('--accent', effectiveAcc);
       document.documentElement.style.setProperty('--accent-fg', isLightHex(effectiveAcc) ? '#111111' : '#ffffff');
       document.documentElement.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.14));
+      document.documentElement.style.setProperty('--ui-active', uiActive);
+      document.documentElement.style.setProperty('--ui-active-fg', uiActiveFg);
+      document.documentElement.style.setProperty('--ui-active-subtle', hexToRgba(uiActive, 0.16));
       document.documentElement.style.setProperty('--radius-ctrl', settings.corner_radius + 'px');
       document.documentElement.style.setProperty('--radius-card', (settings.corner_radius === 0 ? 0 : Math.max(4, Math.round(settings.corner_radius * 1.2))) + 'px');
 
@@ -1690,56 +1745,74 @@
       }
     });
 
-    // Browser Importer
-    function loadBrowsers() {
-      fetch('ferro://api/import/detect')
-        .then(r => r.json())
-        .then(list => {
-          const container = document.getElementById('browserList');
-          if (!list || list.length === 0) {
-            container.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">Сторонние браузеры не обнаружены в стандартных каталогах профиля.</div>';
-            return;
-          }
-          container.innerHTML = list.map(b => `
-            <div class="browser-item">
-              <div class="browser-info">
-                <div class="browser-badge">${b.name.charAt(0)}</div>
-                <div>
-                  <div style="font-weight:600; font-size:13px;">${b.name}</div>
-                  <div style="font-size:11.5px; color:var(--text-secondary);">
-                    Закладки: ${b.bookmarks_count || 0} • История: ${b.history_count || 0}
-                  </div>
+    // Browser Importer (native IPC + fetch fallback)
+    window.onImportDetected = function(list) {
+      const container = document.getElementById('browserList');
+      if (!container) return;
+      if (!Array.isArray(list) || list.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">Сторонние профили с закладками или историей не обнаружены.</div>';
+        return;
+      }
+      container.innerHTML = list.map(b => {
+        const safeId = String(b.id || '').replace(/'/g, "\\'");
+        const safeName = String(b.name || '').replace(/</g, '&lt;');
+        return `
+          <div class="browser-item">
+            <div class="browser-info">
+              <div class="browser-badge">${safeName.charAt(0)}</div>
+              <div>
+                <div style="font-weight:600; font-size:13px;">${safeName}</div>
+                <div style="font-size:11.5px; color:var(--text-secondary);">
+                  Закладки: ${b.bookmarks_count || 0} • История: ${b.history_count || 0}
                 </div>
               </div>
-              <button class="btn btn-primary" onclick="executeImport('${b.id}')">Импортировать</button>
             </div>
-          `).join('');
-        })
-        .catch(() => {
-          document.getElementById('browserList').innerHTML = '<div style="color:var(--text-muted);">Не удалось получить список браузеров.</div>';
-        });
+            <button class="btn btn-primary" onclick="executeImport('${safeId}')">Импортировать</button>
+          </div>
+        `;
+      }).join('');
+    };
+
+    window.onImportCompleted = function(res) {
+      if (!res) return;
+      loadStats();
+      showToast(`Импортировано (${res.browser_name}): ${res.bookmarks_imported} закладок, ${res.history_imported} записей истории`);
+    };
+
+    function loadBrowsers() {
+      if (window._ferro_detected_browsers && Array.isArray(window._ferro_detected_browsers)) {
+        window.onImportDetected(window._ferro_detected_browsers);
+      }
+      sendIpc({ action: 'import_detect' });
+      fetch('ferro://api/import/detect')
+        .then(r => r.json())
+        .then(list => window.onImportDetected(list))
+        .catch(() => {});
     }
 
     window.executeImport = function(browserId) {
       showToast('Выполняется импорт...');
-      fetch('ferro://api/import/run?browser=' + encodeURIComponent(browserId))
-        .then(r => r.json())
-        .then(res => {
-          sendIpc({ action: 'reload_bookmarks' });
-          loadStats();
-          showToast(`Импортировано: ${res.bookmarks_imported} закладок, ${res.history_imported} записей истории`);
-        })
-        .catch(() => showToast('Ошибка при импорте данных'));
+      if (window.ipc) {
+        sendIpc({ action: 'import_run', url: browserId });
+      } else {
+        fetch('ferro://api/import/run?browser=' + encodeURIComponent(browserId))
+          .then(r => r.json())
+          .then(res => window.onImportCompleted(res))
+          .catch(() => showToast('Ошибка при импорте данных'));
+      }
     };
 
-    // Initial load
+    // Apply injected settings synchronously on frame 0 so nothing ever flashes or resets!
+    if (window._ferro_settings) {
+      window.applySettings(window._ferro_settings);
+    } else {
+      applyStateToUi();
+    }
+
     fetch('ferro://api/settings/get')
       .then(r => r.json())
-      .then(s => {
-        if (s) window.applySettings(s);
-        else applyStateToUi();
-      })
-      .catch(() => applyStateToUi());
+      .then(s => { if (s) window.applySettings(s); })
+      .catch(() => {});
 
     loadStats();
     loadBrowsers();

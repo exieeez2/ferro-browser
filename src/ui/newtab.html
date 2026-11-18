@@ -741,7 +741,7 @@
           const fav1 = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
           const fav2 = `https://icons.duckduckgo.com/ip3/${encodeURIComponent(host)}.ico`;
           const safeChar = firstChar.replace(/["'<>]/g, '');
-          return `<img class="tile-favicon-img" src="${fav1}" alt="" onerror="if(!this.dataset.fb){this.dataset.fb='1';this.src='${fav2}';}else{this.outerHTML='<span class=\\'tile-monogram\\'>${safeChar}</span>';}" />`;
+          return `<img class="tile-favicon-img" src="${fav1}" loading="lazy" decoding="async" alt="" onerror="if(!this.dataset.fb){this.dataset.fb='1';this.src='${fav2}';}else{this.outerHTML='<span class=\\'tile-monogram\\'>${safeChar}</span>';}" />`;
         }
       } catch (e) {}
 
@@ -969,11 +969,11 @@
       }
     });
 
-    const WALLPAPERS = {
-      forest: 'https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1920&q=80',
-      cyberpunk: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=1920&q=80',
-      nebula: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=1920&q=80',
-      obsidian: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1920&q=80'
+    const WALLPAPER_GRADIENTS = {
+      forest: 'radial-gradient(ellipse at 25% 20%, #134e4a 0%, #062c28 48%, #090f14 100%)',
+      cyberpunk: 'linear-gradient(135deg, #3b0764 0%, #7e22ce 42%, #0e7490 100%)',
+      nebula: 'radial-gradient(circle at 75% 22%, #4c1d95 0%, #1e1b4b 48%, #09090f 100%)',
+      obsidian: 'radial-gradient(circle at 30% 25%, #2e2e38 0%, #16161b 60%, #0c0c0e 100%)'
     };
 
     const wallpaperEl = document.getElementById('wallpaperBg');
@@ -1024,20 +1024,20 @@
         root.style.setProperty('--radius-search', (rad >= 14 ? 999 : (rad === 0 ? 0 : Math.max(6, Math.round(rad * 1.35)))) + 'px');
       }
 
-      // Apply wallpaper & Zen transparency
-      let bgUrl = '';
-      if (s.wallpaper_type === 'custom' && s.wallpaper_url) {
-        bgUrl = s.wallpaper_url;
-      } else if (WALLPAPERS[s.wallpaper_type]) {
-        bgUrl = WALLPAPERS[s.wallpaper_type];
-      } else if (s.wallpaper_url && s.wallpaper_type !== 'none') {
-        bgUrl = s.wallpaper_url;
-      }
-
+      // Apply instant GPU wallpaper or custom image & Zen transparency
       const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
+      const presetGrad = WALLPAPER_GRADIENTS[s.wallpaper_type];
+      const customUrl = (s.wallpaper_type === 'custom' && s.wallpaper_url) ? s.wallpaper_url : '';
 
-      if (bgUrl && s.wallpaper_type !== 'none') {
-        wallpaperEl.style.backgroundImage = `url("${bgUrl}")`;
+      if (presetGrad) {
+        wallpaperEl.style.backgroundImage = presetGrad;
+        wallpaperEl.style.filter = `blur(${s.wallpaper_blur || 0}px) brightness(${s.wallpaper_brightness || 80}%)`;
+        wallpaperEl.classList.add('active');
+        root.style.background = 'transparent';
+        document.body.style.background = 'transparent';
+        page.style.background = 'transparent';
+      } else if (customUrl) {
+        wallpaperEl.style.backgroundImage = `url("${customUrl}")`;
         wallpaperEl.style.filter = `blur(${s.wallpaper_blur || 0}px) brightness(${s.wallpaper_brightness || 80}%)`;
         wallpaperEl.classList.add('active');
         root.style.background = 'transparent';
@@ -1061,46 +1061,52 @@
       render();
     };
 
-    fetch('ferro://api/settings/get')
-      .then(r => r.json())
-      .then(s => {
-        window.applySettings(s);
+    window.onImportDetected = function(browsers) {
+      if (state.browserSettings && state.browserSettings.has_prompted_import) return;
+      if (Array.isArray(browsers) && browsers.length > 0) {
+        const b = browsers[0];
+        detectedBrowserId = b.id;
+        importBannerText.textContent = `Найдены закладки (${b.bookmarks_count}) и история в ${b.name}. Импортировать?`;
+        importBanner.style.display = 'flex';
+      }
+    };
 
-        if (!s.has_prompted_import) {
-          fetch('ferro://api/import/detect')
-            .then(res => res.json())
-            .then(browsers => {
-              if (Array.isArray(browsers) && browsers.length > 0) {
-                const b = browsers[0];
-                detectedBrowserId = b.id;
-                importBannerText.textContent = `Найдены закладки (${b.bookmarks_count}) и история в ${b.name}. Импортировать?`;
-                importBanner.style.display = 'flex';
-              }
-            }).catch(() => {});
-        }
-      }).catch(() => {});
+    window.onImportCompleted = function(res) {
+      if (!res) return;
+      showToast(`Импортировано: ${res.bookmarks_imported} закладок, ${res.history_imported} страниц истории`);
+      importBanner.style.display = 'none';
+    };
+
+    // Synchronous 0ms render from Rust-injected window._ferro_settings!
+    if (window._ferro_settings) {
+      window.applySettings(window._ferro_settings);
+      if (!window._ferro_settings.has_prompted_import && window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'import_detect' }));
+      }
+    } else {
+      render();
+    }
 
     importNowBtn.addEventListener('click', () => {
       importNowBtn.disabled = true;
       importNowBtn.textContent = 'Импорт...';
-      fetch(`ferro://api/import/run?browser=${detectedBrowserId}`)
-        .then(r => r.json())
-        .then(res => {
-          showToast(`Импортировано: ${res.bookmarks_imported} закладок, ${res.history_imported} страниц истории`);
-          importBanner.style.display = 'none';
-          if (window.ipc) {
-            window.ipc.postMessage(JSON.stringify({ action: 'reload_bookmarks' }));
-          }
-        })
-        .catch(() => {
-          showToast('Ошибка при импорте данных');
-          importBanner.style.display = 'none';
-        });
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'import_run', url: detectedBrowserId }));
+      } else {
+        fetch(`ferro://api/import/run?browser=${encodeURIComponent(detectedBrowserId)}`)
+          .then(r => r.json())
+          .then(res => window.onImportCompleted(res))
+          .catch(() => { importBanner.style.display = 'none'; });
+      }
     });
 
     importDismissBtn.addEventListener('click', () => {
       importBanner.style.display = 'none';
-      fetch('ferro://api/import/dismiss').catch(() => {});
+      if (window.ipc) {
+        window.ipc.postMessage(JSON.stringify({ action: 'import_dismiss' }));
+      } else {
+        fetch('ferro://api/import/dismiss').catch(() => {});
+      }
     });
 
     fetch('ferro://api/session/detect')
@@ -1128,8 +1134,6 @@
         fetch('ferro://api/session/dismiss').catch(() => {});
       }
     });
-
-    render();
   </script>
 </body>
 </html>

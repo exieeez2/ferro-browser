@@ -5,7 +5,6 @@ mod history;
 mod importer;
 mod injector;
 mod lens;
-mod notes;
 mod passwords;
 mod settings;
 mod webkit_filter;
@@ -32,8 +31,11 @@ use bookmarks::BookmarksData;
 use downloads::DownloadsData;
 use history::HistoryData;
 use importer::BrowserImporter;
-use lens::{base64_encode, render_lens_upload_html, render_side_header_html};
-use notes::{render_bookmarks_panel_html, render_sleeping_tab_html, NotesData};
+use lens::{
+    base64_decode, base64_encode, render_bookmarks_panel_html, render_lens_loading_html,
+    render_side_header_html, render_sleeping_tab_html, upload_png_to_google_lens,
+    upload_url_to_google_lens,
+};
 use passwords::PasswordsData;
 use session::{SessionData, SessionTab};
 use settings::BrowserSettings;
@@ -46,6 +48,14 @@ const SHELL_HTML: &str = include_str!("ui/shell.html");
 const NEWTAB_HTML: &str = include_str!("ui/newtab.html");
 const TOKENS_HTML: &str = include_str!("ui/tokens.html");
 const SETTINGS_HTML: &str = include_str!("ui/settings.html");
+
+struct PrewarmedTab {
+    id: u32,
+    tab_name: String,
+    webview: Rc<WebView>,
+    inner: webkit2gtk::WebView,
+    container: gtk::Box,
+}
 
 struct Tab {
     id: u32,
@@ -72,7 +82,9 @@ struct BrowserState {
     side_header_webview: Option<Rc<WebView>>,
     side_webview: Option<Rc<WebView>>,
     side_panel_open: bool,
-    lens_cache: Arc<Mutex<(String, String)>>,
+    lens_preview: Arc<Mutex<String>>,
+    last_lens_result_url: Option<String>,
+    spare_tab: Option<PrewarmedTab>,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
     tabs: Vec<Tab>,
@@ -526,10 +538,16 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
             }
 
             let mut all_wvs: Vec<Rc<WebView>> = state.tabs.iter().map(|t| t.webview.clone()).collect();
+            if let Some(sp) = &state.spare_tab {
+                sp.inner.set_background_color(&surface_rgba);
+                all_wvs.push(sp.webview.clone());
+            }
             if let Some(sh) = &state.side_header_webview {
+                sh.webview().set_background_color(&surface_rgba);
                 all_wvs.push(sh.clone());
             }
             if let Some(sw) = &state.side_webview {
+                sw.webview().set_background_color(&surface_rgba);
                 all_wvs.push(sw.clone());
             }
             (
@@ -747,7 +765,103 @@ fn close_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
     }
 }
 
+fn schedule_prewarm_tab(state_rc: &Rc<RefCell<BrowserState>>) {
+    let state_weak = Rc::downgrade(state_rc);
+    glib::timeout_add_local_once(std::time::Duration::from_millis(140), move || {
+        if let Some(s_rc) = state_weak.upgrade() {
+            let needs_spare = s_rc.try_borrow().map(|st| st.spare_tab.is_none()).unwrap_or(false);
+            if needs_spare {
+                if let Some(spare) = build_raw_tab_webview(&s_rc, "ferro://newtab") {
+                    if let Ok(mut st) = s_rc.try_borrow_mut() {
+                        st.spare_tab = Some(spare);
+                    }
+                }
+            }
+        }
+    });
+}
+
 fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
+    // Fast <1ms path: use pre-warmed spare tab when opening ferro://newtab!
+    if target_url == "ferro://newtab" {
+        let taken = {
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                state.spare_tab.take().map(|spare| {
+                    let s_json = serde_json::to_string(&state.settings).unwrap_or_else(|_| "{}".to_string());
+                    let dz = state.settings.default_zoom.clamp(50, 200);
+                    let id = spare.id;
+                    let t_name = spare.tab_name.clone();
+                    let wv = spare.webview.clone();
+                    state.tabs.push(Tab {
+                        id,
+                        url: "ferro://newtab".to_string(),
+                        title: "Новая вкладка".to_string(),
+                        can_go_back: false,
+                        can_go_forward: false,
+                        is_loading: false,
+                        is_pinned: false,
+                        is_muted: false,
+                        sleeping_url: None,
+                        zoom_pct: dz,
+                        webview: spare.webview,
+                        inner: spare.inner,
+                        container: spare.container,
+                    });
+                    state.active_tab_id = Some(id);
+                    state.stack.set_visible_child_name(&t_name);
+                    (id, wv, s_json)
+                })
+            } else {
+                None
+            }
+        };
+
+        if let Some((id, wv, s_json)) = taken {
+            let _ = wv.evaluate_script(&format!(
+                "window._ferro_settings = {0}; if (window.applySettings) window.applySettings({0});",
+                s_json
+            ));
+            sync_tabs_to_ui(state_rc);
+            schedule_prewarm_tab(state_rc);
+            return id;
+        }
+    }
+
+    let Some(built) = build_raw_tab_webview(state_rc, target_url) else {
+        return 0;
+    };
+    let tab_id = built.id;
+    let tab_name = built.tab_name;
+
+    {
+        if let Ok(mut state) = state_rc.try_borrow_mut() {
+            let dz = state.settings.default_zoom.clamp(50, 200);
+            state.tabs.push(Tab {
+                id: tab_id,
+                url: target_url.to_string(),
+                title: "Новая вкладка".to_string(),
+                can_go_back: false,
+                can_go_forward: false,
+                is_loading: false,
+                is_pinned: false,
+                is_muted: false,
+                sleeping_url: None,
+                zoom_pct: dz,
+                webview: built.webview,
+                inner: built.inner,
+                container: built.container,
+            });
+            state.active_tab_id = Some(tab_id);
+            state.stack.set_visible_child_name(&tab_name);
+        }
+    }
+
+    sync_tabs_to_ui(state_rc);
+    schedule_prewarm_tab(state_rc);
+    tab_id
+}
+
+fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> Option<PrewarmedTab> {
     let (
         tab_id,
         adblocker,
@@ -763,7 +877,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
         passwords_dirty,
         downloads_store,
         source_cache,
-        lens_cache,
+        lens_preview,
     ) = {
         if let Ok(mut state) = state_rc.try_borrow_mut() {
             let id = state.next_tab_id;
@@ -787,10 +901,10 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 state.passwords_dirty.clone(),
                 state.downloads.clone(),
                 state.page_source_cache.clone(),
-                state.lens_cache.clone(),
+                state.lens_preview.clone(),
             )
         } else {
-            return 0;
+            return None;
         }
     };
 
@@ -802,6 +916,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
         r#"
         try {{ window._ferro_settings = {settings_json}; }} catch(e) {{}}
         (function() {{
+            if (window.location.href.startsWith('ferro://settings')) return;
             function injectDynamicTheme() {{
                 const id = 'ferro-theme-vars';
                 if (!document.getElementById(id)) {{
@@ -817,6 +932,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
             injectDynamicTheme();
 
             function injectCosmeticStyle() {{
+                if (window.location.protocol === 'ferro:') return;
                 const id = 'ferro-adblock-cosmetic';
                 if (!document.getElementById(id)) {{
                     const root = document.head || document.documentElement;
@@ -837,10 +953,12 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 }}, {{ once: true }});
             }}
         }})();
-        try {{ {adblock_js} }} catch(e) {{}}
+        if (window.location.protocol !== 'ferro:') {{
+            try {{ {adblock_js} }} catch(e) {{}}
+            try {{ {autofill_js} }} catch(e) {{}}
+        }}
         try {{ {ctx_js} }} catch(e) {{}}
         try {{ {hotkeys_js} }} catch(e) {{}}
-        try {{ {autofill_js} }} catch(e) {{}}
         "#,
         settings_json = settings_json,
         dynamic_theme_css = dynamic_theme_css,
@@ -853,7 +971,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
 
     let mut state_mut = match state_rc.try_borrow_mut() {
         Ok(s) => s,
-        Err(_) => return 0,
+        Err(_) => return None,
     };
 
     let protocol_already_registered = state_mut.web_context.is_custom_protocol_registered("ferro");
@@ -868,22 +986,9 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
                 (TOKENS_HTML.to_string(), "text/html; charset=utf-8")
             } else if path_and_query.starts_with("settings") {
                 (SETTINGS_HTML.to_string(), "text/html; charset=utf-8")
-            } else if path_and_query.starts_with("lens-upload") {
-                let (b64, fb) = lens_cache
-                    .lock()
-                    .map(|g| g.clone())
-                    .unwrap_or_default();
-                (render_lens_upload_html(&b64, &fb), "text/html; charset=utf-8")
-            } else if path_and_query.starts_with("notes") {
-                let n = NotesData::load_or_default();
-                (n.render_html(), "text/html; charset=utf-8")
-            } else if path_and_query.starts_with("api/notes/save") {
-                if let Ok(json_str) = std::str::from_utf8(req.body()) {
-                    if let Ok(notes_data) = serde_json::from_str::<NotesData>(json_str) {
-                        notes_data.save();
-                    }
-                }
-                (r#"{"status":"saved"}"#.to_string(), "application/json")
+            } else if path_and_query.starts_with("lens-loading") {
+                let b64 = lens_preview.lock().map(|g| g.clone()).unwrap_or_default();
+                (render_lens_loading_html(&b64), "text/html; charset=utf-8")
             } else if path_and_query.starts_with("bookmarks-panel") {
                 let b = BookmarksData::load_or_default();
                 (render_bookmarks_panel_html(&b), "text/html; charset=utf-8")
@@ -1090,6 +1195,9 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
 
             wry::http::Response::builder()
                 .header("content-type", content_type)
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-methods", "GET, POST, OPTIONS")
+                .header("access-control-allow-headers", "content-type")
                 .body(std::borrow::Cow::Owned(html.into_bytes()))
                 .unwrap()
         });
@@ -1110,7 +1218,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
         Ok(wv) => Rc::new(wv),
         Err(e) => {
             eprintln!("Failed to create tab webview: {:?}", e);
-            return 0;
+            return None;
         }
     };
     drop(state_mut);
@@ -1345,30 +1453,68 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> u32 {
 
     tab_box.show_all();
 
-    {
-        if let Ok(mut state) = state_rc.try_borrow_mut() {
-            state.tabs.push(Tab {
-                id: tab_id,
-                url: target_url.to_string(),
-                title: "Новая вкладка".to_string(),
-                can_go_back: false,
-                can_go_forward: false,
-                is_loading: false,
-                is_pinned: false,
-                is_muted: false,
-                sleeping_url: None,
-                zoom_pct: settings_snapshot.default_zoom.clamp(50, 200),
-                webview,
-                inner: inner_wv,
-                container: tab_box,
-            });
-            state.active_tab_id = Some(tab_id);
-            state.stack.set_visible_child_name(&tab_name);
+    Some(PrewarmedTab {
+        id: tab_id,
+        tab_name,
+        webview,
+        inner: inner_wv,
+        container: tab_box,
+    })
+}
+
+fn spawn_lens_background_search(
+    state_rc: &Rc<RefCell<BrowserState>>,
+    png_bytes: Option<Vec<u8>>,
+    fallback_url: String,
+    preview_b64: String,
+) {
+    if let Ok(st) = state_rc.try_borrow() {
+        if let Ok(mut guard) = st.lens_preview.lock() {
+            *guard = preview_b64;
         }
     }
+    ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-loading");
 
-    sync_tabs_to_ui(state_rc);
-    tab_id
+    let state_weak = Rc::downgrade(state_rc);
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut resolved = None;
+        if let Some(bytes) = png_bytes {
+            resolved = upload_png_to_google_lens(&bytes);
+        }
+        if resolved.is_none() && !fallback_url.is_empty() {
+            resolved = upload_url_to_google_lens(&fallback_url);
+            if resolved.is_none() && (fallback_url.starts_with("http://") || fallback_url.starts_with("https://")) {
+                let enc = percent_encoding::utf8_percent_encode(&fallback_url, percent_encoding::NON_ALPHANUMERIC);
+                resolved = Some(format!("https://lens.google.com/uploadbyurl?hl=ru&url={}", enc));
+            }
+        }
+        let _ = tx.send(resolved);
+    });
+
+    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+        match rx.try_recv() {
+            Ok(Some(lens_result_url)) => {
+                if let Some(s_rc) = state_weak.upgrade() {
+                    let side_wv = {
+                        if let Ok(mut st) = s_rc.try_borrow_mut() {
+                            st.last_lens_result_url = Some(lens_result_url.clone());
+                            st.side_webview.clone()
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(wv) = side_wv {
+                        wv.webview().load_uri(&lens_result_url);
+                    }
+                }
+                glib::ControlFlow::Break
+            }
+            Ok(None) => glib::ControlFlow::Break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
 }
 
 fn save_current_session(state_rc: &Rc<RefCell<BrowserState>>) {
@@ -1968,10 +2114,10 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
 
                     let cap_info = state_rc.try_borrow().ok().and_then(|st| {
                         let alloc = st.stack.allocation();
-                        st.window.window().map(|gw| (gw, alloc, st.lens_cache.clone()))
+                        st.window.window().map(|gw| (gw, alloc))
                     });
 
-                    if let Some((gdk_win, alloc, lens_cache)) = cap_info {
+                    if let Some((gdk_win, alloc)) = cap_info {
                         let sx = (alloc.width() as f64) / vw;
                         let sy = (alloc.height() as f64) / vh;
                         let px = (alloc.x() + (rx * sx).round() as i32).max(0);
@@ -1979,17 +2125,16 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         let pw = ((rw * sx).round() as i32).max(12).min((alloc.width() - (px - alloc.x())).max(12));
                         let ph = ((rh * sy).round() as i32).max(12).min((alloc.height() - (py - alloc.y())).max(12));
 
+                        let mut png_bytes_opt = None;
                         let mut b64_png = String::new();
                         if let Some(pixbuf) = gdk_win.pixbuf(px, py, pw, ph) {
                             if let Ok(png_bytes) = pixbuf.save_to_bufferv("png", &[]) {
                                 b64_png = base64_encode(&png_bytes);
+                                png_bytes_opt = Some(png_bytes);
                             }
                         }
 
-                        if let Ok(mut guard) = lens_cache.lock() {
-                            *guard = (b64_png, fallback);
-                        }
-                        ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+                        spawn_lens_background_search(state_rc, png_bytes_opt, fallback, b64_png);
                     }
                 }
             }
@@ -1997,33 +2142,37 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         "lens_image_data" => {
             let b64_data = msg.title.unwrap_or_default();
             let fallback = msg.url.unwrap_or_default();
-            if let Ok(st) = state_rc.try_borrow() {
-                if let Ok(mut guard) = st.lens_cache.lock() {
-                    *guard = (b64_data, fallback);
-                }
-            }
-            ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+            let png_bytes_opt = base64_decode(&b64_data);
+            spawn_lens_background_search(state_rc, png_bytes_opt, fallback, b64_data);
         }
         "lens_url" => {
             if let Some(img_url) = msg.url {
-                if let Ok(st) = state_rc.try_borrow() {
-                    if let Ok(mut guard) = st.lens_cache.lock() {
-                        *guard = (String::new(), img_url);
-                    }
-                }
-                ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-upload");
+                spawn_lens_background_search(state_rc, None, img_url, String::new());
             }
         }
         "open_side_panel" => {
-            let mode = msg.url.as_deref().unwrap_or("notes");
-            let route = match mode {
-                "lens" => "ferro://lens-upload",
-                "bookmarks" => "ferro://bookmarks-panel",
-                "history" => "ferro://history",
-                "downloads" => "ferro://downloads",
-                _ => "ferro://notes",
-            };
-            ensure_and_open_side_panel(state_rc, mode, route);
+            let mode = msg.url.as_deref().unwrap_or("bookmarks");
+            match mode {
+                "lens" => {
+                    let prev_url = state_rc
+                        .try_borrow()
+                        .ok()
+                        .and_then(|s| s.last_lens_result_url.clone());
+                    if let Some(u) = prev_url {
+                        ensure_and_open_side_panel(state_rc, "lens", &u);
+                    } else {
+                        let wry_wv = state_rc.try_borrow().ok().and_then(|s| {
+                            s.active_tab_id.and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+                        });
+                        if let Some(wv) = wry_wv {
+                            let _ = wv.evaluate_script("if (window._ferroStartLensOverlay) window._ferroStartLensOverlay();");
+                        }
+                    }
+                }
+                "history" => ensure_and_open_side_panel(state_rc, "history", "ferro://history"),
+                "downloads" => ensure_and_open_side_panel(state_rc, "downloads", "ferro://downloads"),
+                _ => ensure_and_open_side_panel(state_rc, "bookmarks", "ferro://bookmarks-panel"),
+            }
         }
         "toggle_side_panel" => {
             let currently_open = state_rc.try_borrow().map(|s| s.side_panel_open).unwrap_or(false);
@@ -2033,7 +2182,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     st.side_panel_open = false;
                 }
             } else {
-                ensure_and_open_side_panel(state_rc, "notes", "ferro://notes");
+                ensure_and_open_side_panel(state_rc, "bookmarks", "ferro://bookmarks-panel");
             }
         }
         "close_side_panel" => {
@@ -2049,7 +2198,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     .and_then(|wv| wv.webview().uri().map(|u| u.to_string()))
             });
             if let Some(uri) = cur_uri {
-                if !uri.is_empty() && uri != "ferro://lens-upload" {
+                if !uri.is_empty() && uri != "ferro://lens-loading" {
                     let target = if uri == "ferro://bookmarks-panel" { "ferro://newtab" } else { &uri };
                     create_tab(state_rc, target);
                     if let Ok(mut st) = state_rc.try_borrow_mut() {
@@ -2057,6 +2206,79 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         st.side_panel_open = false;
                     }
                 }
+            }
+        }
+        "import_detect" => {
+            let state_weak = Rc::downgrade(state_rc);
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let list = BrowserImporter::detect_all();
+                let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+                let _ = tx.send(json);
+            });
+            glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+                match rx.try_recv() {
+                    Ok(json) => {
+                        if let Some(s_rc) = state_weak.upgrade() {
+                            let wvs: Vec<Rc<WebView>> = s_rc
+                                .try_borrow()
+                                .map(|st| st.tabs.iter().map(|t| t.webview.clone()).collect())
+                                .unwrap_or_default();
+                            let js = format!(
+                                "window._ferro_detected_browsers = {0}; if (window.onImportDetected) window.onImportDetected({0});",
+                                json
+                            );
+                            for wv in wvs {
+                                let _ = wv.evaluate_script(&js);
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                }
+            });
+        }
+        "import_run" => {
+            let browser_id = msg.url.unwrap_or_else(|| "chrome:Default".to_string());
+            let state_weak = Rc::downgrade(state_rc);
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                let res = BrowserImporter::execute_import(&browser_id);
+                let json = serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string());
+                let _ = tx.send(json);
+            });
+            glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                match rx.try_recv() {
+                    Ok(res_json) => {
+                        if let Some(s_rc) = state_weak.upgrade() {
+                            let wvs: Vec<Rc<WebView>> = {
+                                if let Ok(mut st) = s_rc.try_borrow_mut() {
+                                    st.bookmarks = BookmarksData::load_or_default();
+                                    st.history = HistoryData::load_or_default();
+                                    st.settings = BrowserSettings::load_or_default();
+                                    st.tabs.iter().map(|t| t.webview.clone()).collect()
+                                } else {
+                                    Vec::new()
+                                }
+                            };
+                            sync_bookmarks_to_ui(&s_rc);
+                            let js = format!("if (window.onImportCompleted) window.onImportCompleted({});", res_json);
+                            for wv in wvs {
+                                let _ = wv.evaluate_script(&js);
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                }
+            });
+        }
+        "import_dismiss" => {
+            if let Ok(mut st) = state_rc.try_borrow_mut() {
+                st.settings.has_prompted_import = true;
+                let _ = st.settings.save();
             }
         }
         "toggle_reader" => {
@@ -2631,7 +2853,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     });
                     menu.append(&item_passwords);
 
-                    let item_side = gtk::MenuItem::with_label("Боковая панель и Заметки");
+                    let item_side = gtk::MenuItem::with_label("Боковая панель закладок");
                     let s_rc = state_rc.clone();
                     item_side.connect_activate(move |_| {
                         handle_ipc(&s_rc, IpcMessage { action: "toggle_side_panel".to_string(), url: None, id: None, title: None, pass: None, settings: None });
@@ -2957,7 +3179,7 @@ fn main() {
     let history_dirty = Arc::new(AtomicBool::new(false));
     let passwords_dirty = Arc::new(AtomicBool::new(false));
     let downloads = Arc::new(Mutex::new(DownloadsData::load_or_default()));
-    let lens_cache = Arc::new(Mutex::new((String::new(), String::new())));
+    let lens_preview = Arc::new(Mutex::new(String::new()));
     let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let initial_settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string());
     let initial_surface_rgba = compute_surface_rgba(&settings);
@@ -2971,7 +3193,9 @@ fn main() {
         side_header_webview: None,
         side_webview: None,
         side_panel_open: false,
-        lens_cache,
+        lens_preview,
+        last_lens_result_url: None,
+        spare_tab: None,
         css_provider,
         top_webview: None,
         tabs: Vec::new(),
@@ -3141,6 +3365,7 @@ fn main() {
     } else {
         create_tab(&state, "ferro://newtab");
     }
+    schedule_prewarm_tab(&state);
 
     // Save session on window close
     let state_for_delete = state.clone();

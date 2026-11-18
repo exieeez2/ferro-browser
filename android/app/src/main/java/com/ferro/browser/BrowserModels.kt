@@ -55,7 +55,6 @@ data class BookmarkItem(val title: String, val url: String)
 data class HistoryItem(val id: Long, val title: String, val url: String, val timestamp: Long)
 data class PasswordItem(val id: Long, var origin: String, var username: String, var password: String, var createdAt: Long)
 data class DownloadRecord(val id: Long, val filename: String, val url: String, val timestamp: Long)
-data class NoteRecord(val id: Long, var title: String, var content: String, var updatedAt: Long)
 
 class BrowserStorage(private val rootDir: File) {
     val settingsFile = File(rootDir, "settings.json")
@@ -63,7 +62,6 @@ class BrowserStorage(private val rootDir: File) {
     private val historyFile = File(rootDir, "history.json")
     private val passwordsFile = File(rootDir, "passwords.json")
     private val downloadsFile = File(rootDir, "downloads.json")
-    private val notesFile = File(rootDir, "notes.json")
     private val sessionFile = File(rootDir, "session.json")
 
     var settings: MobileSettings = loadSettings()
@@ -71,7 +69,6 @@ class BrowserStorage(private val rootDir: File) {
     val history: MutableList<HistoryItem> = loadHistory()
     val passwords: MutableList<PasswordItem> = loadPasswords()
     val downloads: MutableList<DownloadRecord> = loadDownloads()
-    val notes: MutableList<NoteRecord> = loadNotes()
 
     @Synchronized
     private fun loadSettings(): MobileSettings {
@@ -109,7 +106,6 @@ class BrowserStorage(private val rootDir: File) {
                 BookmarkItem("GitHub", "https://github.com"),
                 BookmarkItem("Reddit", "https://www.reddit.com"),
                 BookmarkItem("Пароли", "https://ferro.local/passwords"),
-                BookmarkItem("Заметки", "https://ferro.local/notes"),
                 BookmarkItem("История", "https://ferro.local/history"),
                 BookmarkItem("ArchWiki", "https://wiki.archlinux.org")
             )
@@ -411,46 +407,6 @@ class BrowserStorage(private val rootDir: File) {
         val arr = JSONArray()
         downloads.forEach {
             arr.put(JSONObject().put("id", it.id).put("filename", it.filename).put("url", it.url).put("timestamp", it.timestamp))
-        }
-        return arr
-    }
-
-    @Synchronized
-    private fun loadNotes(): MutableList<NoteRecord> {
-        val list = mutableListOf<NoteRecord>()
-        if (notesFile.exists()) {
-            runCatching {
-                val arr = JSONArray(notesFile.readText())
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    list.add(NoteRecord(o.optLong("id"), o.optString("title"), o.optString("content"), o.optLong("updated_at")))
-                }
-                if (list.isNotEmpty()) return list
-            }
-        }
-        list.add(NoteRecord(1L, "Быстрые заметки", "", 0L))
-        return list
-    }
-
-    @Synchronized
-    fun saveNotesFromJson(body: String) {
-        runCatching {
-            val root = JSONObject(body)
-            val arr = root.optJSONArray("items") ?: return
-            notes.clear()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                notes.add(NoteRecord(o.optLong("id", i + 1L), o.optString("title"), o.optString("content"), o.optLong("updated_at")))
-            }
-            notesFile.writeText(arr.toString(2))
-        }
-    }
-
-    @Synchronized
-    fun notesJson(): JSONArray {
-        val arr = JSONArray()
-        notes.forEach {
-            arr.put(JSONObject().put("id", it.id).put("title", it.title).put("content", it.content).put("updated_at", it.updatedAt))
         }
         return arr
     }

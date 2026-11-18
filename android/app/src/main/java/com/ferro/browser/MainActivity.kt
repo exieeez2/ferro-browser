@@ -857,6 +857,73 @@ class MainActivity : Activity() {
         sheet.setOnDismissListener { lensWv.destroy() }
         activeLensDialog = sheet
         sheet.show()
+
+        Thread {
+            val resolvedUrl = resolveGoogleLensRedirect(b64Png, imageUrl)
+            if (!resolvedUrl.isNullOrBlank()) {
+                runOnUiThread {
+                    if (activeLensDialog == sheet) {
+                        lensWv.loadUrl(resolvedUrl)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun resolveGoogleLensRedirect(b64Png: String, imageUrl: String): String? {
+        runCatching {
+            val imgBytes: ByteArray? = when {
+                b64Png.length > 20 -> {
+                    val clean = if (b64Png.contains(",")) b64Png.substringAfter(",") else b64Png.trim()
+                    Base64.decode(clean, Base64.DEFAULT)
+                }
+                imageUrl.startsWith("data:image/") -> {
+                    val clean = imageUrl.substringAfter(",")
+                    Base64.decode(clean, Base64.DEFAULT)
+                }
+                imageUrl.startsWith("http://") || imageUrl.startsWith("https://") -> {
+                    val conn = (java.net.URL(imageUrl).openConnection() as java.net.HttpURLConnection).apply {
+                        connectTimeout = 7000
+                        readTimeout = 7000
+                        setRequestProperty("User-Agent", MOBILE_UA)
+                    }
+                    conn.inputStream.use { it.readBytes() }
+                }
+                else -> null
+            }
+
+            if (imgBytes != null && imgBytes.isNotEmpty()) {
+                val boundary = "----FerroLensBoundary" + System.currentTimeMillis()
+                val conn = (java.net.URL("https://lens.google.com/v3/upload?hl=ru").openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    instanceFollowRedirects = false
+                    doOutput = true
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                    setRequestProperty("User-Agent", MOBILE_UA)
+                    setRequestProperty("Origin", "https://lens.google.com")
+                    setRequestProperty("Referer", "https://lens.google.com/")
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                }
+                conn.outputStream.use { out ->
+                    val head = "--$boundary\r\nContent-Disposition: form-data; name=\"encoded_image\"; filename=\"lens.png\"\r\nContent-Type: image/png\r\n\r\n"
+                    val tail = "\r\n--$boundary--\r\n"
+                    out.write(head.toByteArray(Charsets.UTF_8))
+                    out.write(imgBytes)
+                    out.write(tail.toByteArray(Charsets.UTF_8))
+                    out.flush()
+                }
+                val loc = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (!loc.isNullOrBlank()) {
+                    return if (loc.startsWith("http")) loc else "https://lens.google.com$loc"
+                }
+            }
+        }
+        if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+            return "https://lens.google.com/uploadbyurl?hl=ru&url=" + Uri.encode(imageUrl)
+        }
+        return null
     }
 
     // =========================================================================
@@ -1332,7 +1399,6 @@ class MainActivity : Activity() {
         rowItem("Пароли") { active.webView.loadUrl("https://ferro.local/passwords") }
         rowItem("История просмотров") { active.webView.loadUrl("https://ferro.local/history") }
         rowItem("Загрузки") { active.webView.loadUrl("https://ferro.local/downloads") }
-        rowItem("Быстрые заметки") { active.webView.loadUrl("https://ferro.local/notes") }
 
         addSep()
         val abStatus = if (storage.settings.adblockEnabled) {
@@ -1510,7 +1576,6 @@ class MainActivity : Activity() {
                         "delete_password" -> storage.deletePassword(msg.optLong("id"))
                         "clear_history" -> storage.clearHistory()
                         "clear_downloads" -> storage.clearDownloads()
-                        "save_notes" -> storage.saveNotesFromJson(msg.optString("body"))
                         "copy_text" -> copyText(msg.optString("text"), msg.optString("toast"))
                         "open_image_lens_picker" -> openGalleryForLens()
                         "clear_browsing_data" -> {

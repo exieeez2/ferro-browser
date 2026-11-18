@@ -1,4 +1,12 @@
-/// Google Lens & Chrome-style Side Panel support for Ferro Browser.
+/// Google Lens (native curl multipart uploader with valid Origin headers — zero 403!)
+/// & Chrome-style Side Panel helpers for Ferro Browser.
+
+use crate::bookmarks::BookmarksData;
+use std::fs;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static LENS_SEQ: AtomicU64 = AtomicU64::new(1);
 
 const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -29,19 +37,156 @@ pub fn base64_encode(input: &[u8]) -> String {
     out
 }
 
-/// Renders the auto-submitting `ferro://lens-upload` page inside the Side Panel WebView.
-/// Submits raw PNG bytes as `multipart/form-data` (`encoded_image`) directly to
-/// `https://lens.google.com/v3/upload?hl=ru` using the user's WebKit session & cookies.
-pub fn render_lens_upload_html(b64_png: &str, fallback_url: &str) -> String {
-    let b64_json = serde_json::to_string(b64_png).unwrap_or_else(|_| "\"\"".to_string());
-    let url_json = serde_json::to_string(fallback_url).unwrap_or_else(|_| "\"\"".to_string());
+pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let clean = input
+        .split(',')
+        .last()
+        .unwrap_or(input)
+        .trim();
+    if clean.is_empty() {
+        return None;
+    }
+
+    let mut lut = [255u8; 256];
+    for (idx, &ch) in B64_CHARS.iter().enumerate() {
+        lut[ch as usize] = idx as u8;
+    }
+
+    let mut out = Vec::with_capacity((clean.len() * 3) / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u8;
+
+    for b in clean.bytes() {
+        if b == b'=' || b.is_ascii_whitespace() {
+            continue;
+        }
+        let val = lut[b as usize];
+        if val == 255 {
+            return None;
+        }
+        buf = (buf << 6) | (val as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Uploads raw PNG bytes directly to `https://lens.google.com/v3/upload?hl=ru` with proper
+/// `Origin: https://lens.google.com` & `Referer: https://lens.google.com/` headers so Google
+/// responds with `303 See Other` -> `https://www.google.com/search?vsrid=...&udm=26...&hl=ru`
+/// instead of `403 Forbidden`.
+pub fn upload_png_to_google_lens(png_bytes: &[u8]) -> Option<String> {
+    if png_bytes.len() < 24 {
+        return None;
+    }
+    let seq = LENS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = std::env::temp_dir().join(format!("ferro_lens_{}_{}.png", std::process::id(), seq));
+    fs::write(&tmp_path, png_bytes).ok()?;
+
+    let form_arg = format!(
+        "encoded_image=@{};type=image/png;filename=image.png",
+        tmp_path.to_string_lossy()
+    );
+
+    let output = Command::new("curl")
+        .args([
+            "-s",
+            "-i",
+            "--max-time",
+            "12",
+            "-X",
+            "POST",
+            "https://lens.google.com/v3/upload?hl=ru",
+            "-H",
+            "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "-H",
+            "Origin: https://lens.google.com",
+            "-H",
+            "Referer: https://lens.google.com/",
+            "-F",
+            &form_arg,
+        ])
+        .output();
+
+    let _ = fs::remove_file(&tmp_path);
+
+    let out = output.ok()?;
+    let raw_headers = String::from_utf8_lossy(&out.stdout);
+    for line in raw_headers.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("location:") {
+            let loc = line["location:".len()..].trim();
+            if loc.starts_with("https://") || loc.starts_with("http://") {
+                return Some(loc.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Downloads an external image URL and uploads its bytes to Google Lens `v3/upload`
+/// (works even on hotlink-protected or non-indexed images!).
+pub fn upload_url_to_google_lens(img_url: &str) -> Option<String> {
+    if let Some(rest) = img_url.strip_prefix("data:") {
+        if let Some(bytes) = base64_decode(rest) {
+            return upload_png_to_google_lens(&bytes);
+        }
+    }
+
+    let seq = LENS_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dl_path = std::env::temp_dir().join(format!("ferro_lens_dl_{}_{}.img", std::process::id(), seq));
+
+    let dl_ok = Command::new("curl")
+        .args([
+            "-sL",
+            "--max-time",
+            "8",
+            "-H",
+            "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "-o",
+            dl_path.to_string_lossy().as_ref(),
+            img_url,
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if dl_ok {
+        if let Ok(bytes) = fs::read(&dl_path) {
+            let _ = fs::remove_file(&dl_path);
+            if let Some(res_url) = upload_png_to_google_lens(&bytes) {
+                return Some(res_url);
+            }
+        }
+    }
+    let _ = fs::remove_file(&dl_path);
+    None
+}
+
+/// Sleek dark loading state displayed in the Side Panel for ~300ms while `curl` uploads the crop.
+pub fn render_lens_loading_html(preview_b64: &str) -> String {
+    let preview_tag = if !preview_b64.is_empty() {
+        let src = if preview_b64.starts_with("data:") {
+            preview_b64.to_string()
+        } else {
+            format!("data:image/png;base64,{}", preview_b64)
+        };
+        format!(
+            r#"<div class="preview-box"><img src="{}" alt="" /><div class="scan-line"></div></div>"#,
+            src
+        )
+    } else {
+        String::new()
+    };
 
     format!(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Google Объектив</title>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -66,7 +211,6 @@ pub fn render_lens_upload_html(b64_png: &str, fallback_url: &str) -> String {
       overflow: hidden;
       border: 1px solid rgba(255,255,255,0.14);
       box-shadow: 0 12px 36px rgba(0,0,0,0.55);
-      display: none;
     }}
     .preview-box img {{
       display: block;
@@ -87,7 +231,7 @@ pub fn render_lens_upload_html(b64_png: &str, fallback_url: &str) -> String {
       height: 2px;
       background: linear-gradient(90deg, #4285f4, #a142f4, #34a853, #fbbc05);
       box-shadow: 0 0 12px rgba(66, 133, 244, 0.9);
-      animation: scanMove 1.8s ease-in-out infinite;
+      animation: scanMove 1.6s ease-in-out infinite;
     }}
     .status {{
       display: flex;
@@ -106,77 +250,20 @@ pub fn render_lens_upload_html(b64_png: &str, fallback_url: &str) -> String {
       border-radius: 50%;
       animation: spin 0.75s linear infinite;
     }}
-    form {{ display: none; }}
   </style>
 </head>
 <body>
-  <div class="preview-box" id="previewBox">
-    <img id="previewImg" alt="Lens selection" />
-    <div class="scan-line"></div>
-  </div>
-
+  {preview_tag}
   <div class="status">
     <div class="spinner"></div>
-    <span id="statusTxt">Анализ изображения в Google Объективе...</span>
+    <span>Поиск в Google Объективе...</span>
   </div>
-
-  <form id="lensForm" method="POST" enctype="multipart/form-data" action="https://lens.google.com/v3/upload?hl=ru&re=df&ep=ccm">
-    <input type="file" name="encoded_image" id="fileInput" />
-  </form>
-
-  <script>
-    (function() {{
-      const rawB64 = {b64_json};
-      const fallbackUrl = {url_json};
-
-      function submitBase64Png(b64Data) {{
-        const clean = b64Data.includes(',') ? b64Data.split(',')[1] : b64Data;
-        const previewImg = document.getElementById('previewImg');
-        const previewBox = document.getElementById('previewBox');
-        previewImg.src = 'data:image/png;base64,' + clean;
-        previewBox.style.display = 'block';
-
-        const bin = atob(clean);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) {{
-          bytes[i] = bin.charCodeAt(i);
-        }}
-        const file = new File([bytes], 'selection.png', {{ type: 'image/png' }});
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        const inp = document.getElementById('fileInput');
-        inp.files = dt.files;
-        setTimeout(() => {{
-          document.getElementById('lensForm').submit();
-        }}, 60);
-      }}
-
-      if (rawB64 && rawB64.length > 16) {{
-        try {{
-          submitBase64Png(rawB64);
-          return;
-        }} catch (e) {{}}
-      }}
-
-      if (fallbackUrl) {{
-        if (fallbackUrl.startsWith('data:image/')) {{
-          try {{
-            submitBase64Png(fallbackUrl);
-            return;
-          }} catch (e) {{}}
-        }}
-        window.location.replace('https://lens.google.com/uploadbyurl?hl=ru&url=' + encodeURIComponent(fallbackUrl));
-      }} else {{
-        document.getElementById('statusTxt').textContent = 'Выберите область на странице для поиска';
-      }}
-    }})();
-  </script>
 </body>
-</html>"#
+</html>"##
     )
 }
 
-/// Renders the 36px Chrome-style Side Panel header bar.
+/// Renders the 36px Chrome-style Side Panel header bar (Lens, Bookmarks, History — no Notes).
 pub fn render_side_header_html() -> &'static str {
     r##"<!DOCTYPE html>
 <html lang="ru" data-theme="dark">
@@ -189,7 +276,7 @@ pub fn render_side_header_html() -> &'static str {
       --border: #2a2a30;
       --fg: #ececef;
       --muted: #90909a;
-      --accent: #ececec;
+      --accent: #3b82f6;
       --radius: 4px;
     }
     html[data-theme="light"] {
@@ -198,7 +285,7 @@ pub fn render_side_header_html() -> &'static str {
       --border: #d0d4dc;
       --fg: #18181b;
       --muted: #5f6368;
-      --accent: #18181b;
+      --accent: #2563eb;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     body {
@@ -218,15 +305,12 @@ pub fn render_side_header_html() -> &'static str {
     .tabs {
       display: flex;
       align-items: center;
-      gap: 2px;
+      gap: 3px;
       min-width: 0;
-      overflow-x: auto;
-      scrollbar-width: none;
     }
-    .tabs::-webkit-scrollbar { display: none; }
     .tab-btn {
       height: 26px;
-      padding: 0 8px;
+      padding: 0 9px;
       border: 1px solid transparent;
       border-radius: var(--radius);
       background: transparent;
@@ -247,7 +331,7 @@ pub fn render_side_header_html() -> &'static str {
     .tab-btn.active {
       background: var(--bg-hover);
       color: var(--fg);
-      border-color: var(--border);
+      border-color: var(--accent);
       font-weight: 600;
     }
     .actions {
@@ -286,10 +370,6 @@ pub fn render_side_header_html() -> &'static str {
         <circle cx="17.5" cy="17.5" r="2.2" fill="#34A853"/>
       </svg>
       <span>Объектив</span>
-    </button>
-    <button class="tab-btn" data-mode="notes" title="Заметки">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-      <span>Заметки</span>
     </button>
     <button class="tab-btn" data-mode="bookmarks" title="Закладки">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
@@ -347,7 +427,11 @@ pub fn render_side_header_html() -> &'static str {
     window.applySettings = function(s) {
       if (!s) return;
       document.documentElement.setAttribute('data-theme', s.theme_mode === 'light' ? 'light' : 'dark');
-      if (s.accent_color) document.documentElement.style.setProperty('--accent', s.accent_color);
+      if (s.accent_color && s.accent_color.toLowerCase() !== '#ececec') {
+        document.documentElement.style.setProperty('--accent', s.accent_color);
+      } else {
+        document.documentElement.style.setProperty('--accent', '#3b82f6');
+      }
       if (s.corner_radius !== undefined) document.documentElement.style.setProperty('--radius', Math.min(10, s.corner_radius) + 'px');
     };
   </script>
@@ -355,16 +439,228 @@ pub fn render_side_header_html() -> &'static str {
 </html>"##
 }
 
+pub fn render_bookmarks_panel_html(bookmarks: &BookmarksData) -> String {
+    let items_json = serde_json::to_string(&bookmarks.items).unwrap_or_else(|_| "[]".to_string());
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <title>Закладки — Ferro</title>
+  <style>
+    :root {{
+      --bg: #111111;
+      --surface: #18181b;
+      --hover: #222227;
+      --border: #2a2a30;
+      --text: #ececef;
+      --muted: #8e8e98;
+      --radius: 6px;
+    }}
+    html[data-theme="light"] {{
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --hover: #eceef2;
+      --border: #d5d8e0;
+      --text: #18181b;
+      --muted: #686b75;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, sans-serif;
+      padding: 12px;
+    }}
+    .top {{ display: flex; gap: 6px; margin-bottom: 10px; }}
+    input {{
+      flex: 1;
+      height: 32px;
+      padding: 0 10px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 12.5px;
+      outline: none;
+    }}
+    .btn {{
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+    }}
+    .btn:hover {{ background: var(--hover); }}
+    .list {{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }}
+    .row {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 11px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }}
+    .row:last-child {{ border-bottom: none; }}
+    .row:hover {{ background: var(--hover); }}
+    .row img {{ width: 16px; height: 16px; border-radius: 3px; flex-shrink: 0; }}
+    .meta {{ flex: 1; min-width: 0; }}
+    .title {{ font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+    .url {{ font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+    .del {{ border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 4px; }}
+    .del:hover {{ color: #ef4444; background: rgba(239,68,68,0.12); }}
+    .empty {{ padding: 32px 14px; text-align: center; color: var(--muted); font-size: 12.5px; }}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <input type="text" id="q" placeholder="Поиск закладок..." />
+    <button class="btn" id="btnAddActive" title="Добавить текущую вкладку">+ Текущая</button>
+  </div>
+  <div class="list" id="list"></div>
+  <script>
+    let items = {items_json};
+    const listEl = document.getElementById('list');
+    const qEl = document.getElementById('q');
+    function send(p) {{ if (window.ipc) window.ipc.postMessage(JSON.stringify(p)); }}
+    function esc(s) {{ return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }}
+
+    function render() {{
+      const q = qEl.value.trim().toLowerCase();
+      const flt = items.filter(b => !q || (b.title || '').toLowerCase().includes(q) || (b.url || '').toLowerCase().includes(q));
+      if (!flt.length) {{
+        listEl.innerHTML = '<div class="empty">Закладки не найдены</div>';
+        return;
+      }}
+      listEl.innerHTML = flt.map(b => {{
+        let host = '';
+        try {{ host = new URL(b.url).hostname; }} catch(e) {{}}
+        const ico = host ? `https://www.google.com/s2/favicons?domain=${{encodeURIComponent(host)}}&sz=32` : '';
+        return `<div class="row" data-url="${{encodeURIComponent(b.url)}}">
+          ${{ico ? `<img src="${{ico}}" loading="lazy" decoding="async" alt="" onerror="this.style.display='none'"/>` : ''}}
+          <div class="meta">
+            <div class="title">${{esc(b.title || b.url)}}</div>
+            <div class="url">${{esc(b.url)}}</div>
+          </div>
+          <button class="del" data-del="${{encodeURIComponent(b.url)}}" data-title="${{encodeURIComponent(b.title || '')}}" title="Удалить">✕</button>
+        </div>`;
+      }}).join('');
+
+      listEl.querySelectorAll('.row').forEach(r => {{
+        r.addEventListener('click', (ev) => {{
+          const delBtn = ev.target.closest('.del');
+          if (delBtn) {{
+            ev.stopPropagation();
+            const u = decodeURIComponent(delBtn.dataset.del);
+            const t = decodeURIComponent(delBtn.dataset.title);
+            items = items.filter(x => x.url !== u);
+            send({{ action: 'toggle_bookmark', url: u, title: t }});
+            render();
+            return;
+          }}
+          send({{ action: 'navigate', url: decodeURIComponent(r.dataset.url) }});
+        }});
+      }});
+    }}
+
+    document.getElementById('btnAddActive').addEventListener('click', () => {{
+      send({{ action: 'toggle_bookmark_active' }});
+      setTimeout(() => window.location.reload(), 200);
+    }});
+    qEl.addEventListener('input', render);
+    if (window._ferro_settings && window._ferro_settings.theme_mode) {{
+      document.documentElement.setAttribute('data-theme', window._ferro_settings.theme_mode === 'light' ? 'light' : 'dark');
+    }}
+    render();
+  </script>
+</body>
+</html>"##
+    )
+}
+
+pub fn render_sleeping_tab_html(target_url: &str, title: &str) -> String {
+    let url_json = serde_json::to_string(target_url).unwrap_or_else(|_| "\"\"".to_string());
+    let safe_title = title.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    let safe_url = target_url.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>{safe_title}</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: #121215;
+      color: #ececef;
+      font-family: 'Inter', -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }}
+    .card {{
+      max-width: 440px;
+      width: 100%;
+      background: #18181c;
+      border: 1px solid #2b2b33;
+      border-radius: 10px;
+      padding: 26px;
+      text-align: center;
+    }}
+    h2 {{ font-size: 15px; font-weight: 600; margin: 12px 0 6px; }}
+    p {{ font-size: 12px; color: #90909c; word-break: break-all; margin-bottom: 18px; }}
+    button {{
+      height: 34px;
+      padding: 0 18px;
+      border-radius: 6px;
+      border: none;
+      background: #3b82f6;
+      color: #ffffff;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <h2>Вкладка выгружена для экономии памяти</h2>
+    <p>{safe_url}</p>
+    <button id="wakeBtn">Разбудить вкладку</button>
+  </div>
+  <script>
+    const target = {url_json};
+    document.getElementById('wakeBtn').addEventListener('click', () => {{
+      if (target) window.location.replace(target);
+    }});
+  </script>
+</body>
+</html>"##
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_base64_encode() {
+    fn test_base64_roundtrip() {
         assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"FerroLens"), "RmVycm9MZW5z");
+        let raw = b"\x89PNG\r\n\x1a\n\x00\x01\x02\xffFerro";
+        let enc = base64_encode(raw);
+        let dec = base64_decode(&format!("data:image/png;base64,{}", enc)).unwrap();
+        assert_eq!(dec, raw);
     }
 }

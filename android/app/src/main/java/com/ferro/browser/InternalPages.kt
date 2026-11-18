@@ -31,8 +31,7 @@ object InternalPages {
             path.startsWith("passwords") -> renderPasswords(storage)
             path.startsWith("history") -> renderHistory(storage)
             path.startsWith("downloads") -> renderDownloads(storage)
-            path.startsWith("notes") -> renderNotes(storage)
-            path.startsWith("lens-upload") -> renderLensUpload(pendingLensB64, pendingLensUrl)
+            path.startsWith("lens-upload") -> renderLensUpload(pendingLensB64)
             else -> renderNewTab(storage)
         }
         return htmlResponse(html)
@@ -772,61 +771,13 @@ object InternalPages {
         """.trimIndent()
     }
 
-    private fun renderNotes(storage: BrowserStorage): String {
-        val s = storage.settings
-        val nJson = storage.notesJson().toString()
-        return """
-        <!DOCTYPE html>
-        <html lang="ru">
-        <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-            <title>Заметки — Ferro</title>
-            <style>
-                ${baseCss(s)}
-                body { padding: 16px; display: flex; flex-direction: column; height: 100dvh; gap: 10px; max-width: 600px; margin: 0 auto; }
-                h1 { font-size: 18px; font-weight: 700; }
-                input { height: 42px; padding: 0 12px; font-weight: 600; }
-                textarea { flex: 1; padding: 12px; line-height: 1.55; resize: none; }
-                .status { font-size: 12px; color: var(--muted); text-align: right; }
-            </style>
-        </head>
-        <body>
-            <h1>Быстрые заметки</h1>
-            <input id="nTitle" type="text" placeholder="Заголовок..." />
-            <textarea id="nBody" placeholder="Ваши заметки, ссылки и идеи..."></textarea>
-            <div class="status" id="st">Сохранено</div>
-            <script>
-                let notes = $nJson;
-                if (!notes.length) notes = [{ id: 1, title: 'Быстрые заметки', content: '', updated_at: 0 }];
-                const tEl = document.getElementById('nTitle');
-                const bEl = document.getElementById('nBody');
-                tEl.value = notes[0].title || '';
-                bEl.value = notes[0].content || '';
-                let tmr = null;
-                function save() {
-                    document.getElementById('st').textContent = 'Сохранение...';
-                    clearTimeout(tmr);
-                    tmr = setTimeout(() => {
-                        notes[0].title = tEl.value;
-                        notes[0].content = bEl.value;
-                        if (window.FerroBridge) {
-                            window.FerroBridge.postMessage(JSON.stringify({ action: 'save_notes', body: JSON.stringify({ items: notes }) }));
-                        }
-                        document.getElementById('st').textContent = 'Сохранено';
-                    }, 250);
-                }
-                tEl.oninput = save;
-                bEl.oninput = save;
-            </script>
-        </body>
-        </html>
-        """.trimIndent()
-    }
-
-    private fun renderLensUpload(b64Png: String, fallbackUrl: String): String {
-        val b64Json = JSONObject.quote(b64Png)
-        val urlJson = JSONObject.quote(fallbackUrl)
+    private fun renderLensUpload(b64Png: String): String {
+        val clean = if (b64Png.contains(",")) b64Png.substringAfter(",") else b64Png.trim()
+        val imgHtml = if (clean.length > 20) {
+            """<img src="data:image/png;base64,$clean" alt="" />"""
+        } else {
+            ""
+        }
         return """
         <!DOCTYPE html>
         <html lang="ru">
@@ -837,46 +788,17 @@ object InternalPages {
             <style>
                 * { box-sizing: border-box; margin: 0; padding: 0; }
                 body { background: #141418; color: #f2f2f6; font-family: -apple-system, Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; }
-                img { max-width: 220px; max-height: 190px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.16); display: none; }
+                img { max-width: 220px; max-height: 190px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.16); }
                 @keyframes spin { to { transform: rotate(360deg); } }
                 .sp { width: 20px; height: 20px; border: 2.5px solid rgba(255,255,255,0.2); border-top-color: #4285F4; border-radius: 50%; animation: spin 0.75s linear infinite; }
-                form { display: none; }
             </style>
         </head>
         <body>
-            <img id="prev" alt="" />
+            $imgHtml
             <div style="display:flex;align-items:center;gap:10px;font-size:14px;">
                 <div class="sp"></div>
                 <span>Поиск в Google Объективе...</span>
             </div>
-            <form id="f" method="POST" enctype="multipart/form-data" action="https://lens.google.com/v3/upload?hl=ru&re=df&ep=ccm">
-                <input type="file" name="encoded_image" id="fi" />
-            </form>
-            <script>
-                (function() {
-                    const b64 = $b64Json;
-                    const fb = $urlJson;
-                    function sendB64(raw) {
-                        const clean = raw.includes(',') ? raw.split(',')[1] : raw;
-                        const p = document.getElementById('prev');
-                        p.src = 'data:image/png;base64,' + clean;
-                        p.style.display = 'block';
-                        const bin = atob(clean);
-                        const u8 = new Uint8Array(bin.length);
-                        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-                        const dt = new DataTransfer();
-                        dt.items.add(new File([u8], 'lens.png', { type: 'image/png' }));
-                        document.getElementById('fi').files = dt.files;
-                        setTimeout(() => document.getElementById('f').submit(), 50);
-                    }
-                    if (b64 && b64.length > 20) {
-                        sendB64(b64);
-                    } else if (fb) {
-                        if (fb.startsWith('data:image/')) sendB64(fb);
-                        else window.location.replace('https://lens.google.com/uploadbyurl?hl=ru&url=' + encodeURIComponent(fb));
-                    }
-                })();
-            </script>
         </body>
         </html>
         """.trimIndent()
