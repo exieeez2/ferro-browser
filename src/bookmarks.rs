@@ -54,11 +54,21 @@ impl BookmarksData {
         }
     }
 
+    pub fn is_spam_bookmark(url: &str) -> bool {
+        let lower = url.to_ascii_lowercase();
+        lower.contains("clck.showmelinks.com") || lower.contains("yandex.ru/search/?clid=2296555")
+    }
+
     pub fn load_or_default() -> Self {
         let path = Self::config_path();
         if path.exists() {
             if let Ok(data) = fs::read_to_string(&path) {
-                if let Ok(parsed) = serde_json::from_str::<BookmarksData>(&data) {
+                if let Ok(mut parsed) = serde_json::from_str::<BookmarksData>(&data) {
+                    let before = parsed.items.len();
+                    parsed.items.retain(|b| !Self::is_spam_bookmark(&b.url));
+                    if parsed.items.len() != before {
+                        parsed.save();
+                    }
                     return parsed;
                 }
             }

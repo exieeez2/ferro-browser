@@ -205,8 +205,16 @@ impl BrowserImporter {
         if let Ok(content) = fs::read_to_string(bookmarks_file) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(roots) = val.get("roots").and_then(|r| r.as_object()) {
-                    for (_key, root_val) in roots {
-                        Self::collect_chromium_nodes(root_val, &mut results);
+                    // Import the user's actual Bookmarks Bar ("bookmark_bar") first!
+                    // Only fall back to "other" / "synced" if "bookmark_bar" is empty,
+                    // avoiding dumping OEM/other-folder clutter onto the top bookmarks bar.
+                    if let Some(bar) = roots.get("bookmark_bar") {
+                        Self::collect_chromium_nodes(bar, &mut results);
+                    }
+                    if results.is_empty() {
+                        if let Some(other) = roots.get("other") {
+                            Self::collect_chromium_nodes(other, &mut results);
+                        }
                     }
                 }
             }
@@ -219,7 +227,10 @@ impl BrowserImporter {
             if type_str == "url" {
                 let url = node.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
                 let name = node.get("name").and_then(|n| n.as_str()).unwrap_or(&url).to_string();
-                if !url.is_empty() && (url.starts_with("http://") || url.starts_with("https://")) {
+                if !url.is_empty()
+                    && (url.starts_with("http://") || url.starts_with("https://"))
+                    && !crate::bookmarks::BookmarksData::is_spam_bookmark(&url)
+                {
                     list.push((url, name));
                 }
             }

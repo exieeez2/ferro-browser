@@ -86,6 +86,7 @@ struct BrowserState {
     last_lens_result_url: Option<String>,
     spare_tab: Option<PrewarmedTab>,
     active_popover: Option<gtk::Popover>,
+    pip_window: Option<(gtk::Window, Rc<WebView>, Option<u32>)>,
     win_fullscreen: bool,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
@@ -1631,6 +1632,264 @@ fn spawn_lens_background_search(
     });
 }
 
+fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str, start_sec: u32) {
+    let origin_tab_id = {
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            if let Some((old_win, _, _)) = st.pip_window.take() {
+                old_win.close();
+            }
+            st.active_tab_id
+        } else {
+            return;
+        }
+    };
+
+    let pip_win = gtk::Window::new(gtk::WindowType::Toplevel);
+    pip_win.set_title("Картинка в картинке — Ferro");
+    pip_win.set_default_size(480, 270);
+    pip_win.set_decorated(false);
+    pip_win.set_keep_above(true);
+    pip_win.stick();
+    pip_win.set_resizable(true);
+    pip_win.set_type_hint(gdk::WindowTypeHint::Utility);
+
+    let root_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    pip_win.add(&root_box);
+
+    let pip_init_js = format!(
+        r##"
+        window._ferro_is_pip_window = true;
+        try {{
+            if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {{
+                const origSup = window.MediaSource.isTypeSupported.bind(window.MediaSource);
+                window.MediaSource.isTypeSupported = function(m) {{
+                    if (typeof m === 'string' && /av01/i.test(m)) return false;
+                    return origSup(m);
+                }};
+            }}
+        }} catch(e) {{}}
+
+        (function() {{
+            const startAt = {start_sec};
+            let seekApplied = false;
+            let wasInAd = false;
+
+            function installPipUi() {{
+                const root = document.head || document.documentElement;
+                if (root && !document.getElementById('ferro-pip-full-css')) {{
+                    const st = document.createElement('style');
+                    st.id = 'ferro-pip-full-css';
+                    st.textContent = `
+                        html, body {{
+                            overflow: hidden !important;
+                            background: #000 !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                        }}
+                        #masthead-container, ytd-masthead, #secondary, #below, #comments, #chat, ytd-merch-shelf-renderer {{
+                            display: none !important;
+                        }}
+                        #movie_player, .html5-video-player {{
+                            position: fixed !important;
+                            inset: 0 !important;
+                            width: 100vw !important;
+                            height: 100vh !important;
+                            z-index: 2147483640 !important;
+                            background: #000 !important;
+                        }}
+                        .html5-video-container, video.html5-main-video, body > video {{
+                            position: fixed !important;
+                            inset: 0 !important;
+                            left: 0 !important;
+                            top: 0 !important;
+                            width: 100vw !important;
+                            height: 100vh !important;
+                            object-fit: contain !important;
+                            background: #000 !important;
+                        }}
+                    `;
+                    root.appendChild(st);
+                }}
+
+                if (document.body && !document.getElementById('ferro-pip-topbar-host')) {{
+                    const host = document.createElement('div');
+                    host.id = 'ferro-pip-topbar-host';
+                    host.style.cssText = 'position:fixed;top:0;left:0;right:0;height:36px;z-index:2147483647;pointer-events:none;';
+                    const sh = host.attachShadow({{ mode: 'open' }});
+                    sh.innerHTML = `
+                        <style>
+                            .bar {{
+                                display: flex;
+                                align-items: center;
+                                justify-content: space-between;
+                                height: 34px;
+                                padding: 0 8px 0 12px;
+                                background: linear-gradient(180deg, rgba(12,12,16,0.88) 0%, rgba(12,12,16,0.45) 75%, transparent 100%);
+                                color: #f4f4f7;
+                                font-family: 'Inter', -apple-system, sans-serif;
+                                font-size: 11.5px;
+                                opacity: 0;
+                                pointer-events: none;
+                                transition: opacity 150ms ease;
+                                user-select: none;
+                            }}
+                            .bar.show {{
+                                opacity: 1;
+                                pointer-events: auto;
+                            }}
+                            .drag {{
+                                flex: 1;
+                                height: 100%;
+                                display: flex;
+                                align-items: center;
+                                cursor: grab;
+                                font-weight: 500;
+                                color: rgba(244,244,247,0.88);
+                            }}
+                            .btns {{ display: flex; align-items: center; gap: 5px; }}
+                            button {{
+                                height: 24px;
+                                padding: 0 9px;
+                                border-radius: 6px;
+                                border: 1px solid rgba(255,255,255,0.2);
+                                background: rgba(24,24,30,0.82);
+                                color: #f4f4f7;
+                                font-size: 11px;
+                                font-weight: 500;
+                                cursor: pointer;
+                            }}
+                            button:hover {{ background: rgba(59,130,246,0.88); border-color: rgba(147,197,253,0.7); }}
+                            button.cls:hover {{ background: #c93b3b; border-color: #ef4444; }}
+                        </style>
+                        <div class="bar" id="pipBar">
+                            <div class="drag" id="pipDrag">Картинка в картинке</div>
+                            <div class="btns">
+                                <button type="button" id="pipBack">Вернуть во вкладку</button>
+                                <button type="button" class="cls" id="pipClose">✕</button>
+                            </div>
+                        </div>
+                    `;
+                    const bar = sh.getElementById('pipBar');
+                    let hideT = null;
+                    window.addEventListener('mousemove', () => {{
+                        bar.classList.add('show');
+                        clearTimeout(hideT);
+                        hideT = setTimeout(() => bar.classList.remove('show'), 1700);
+                    }}, {{ passive: true }});
+
+                    let dDown = false, sx = 0, sy = 0;
+                    sh.getElementById('pipDrag').addEventListener('mousedown', (e) => {{
+                        if (e.button === 0) {{ dDown = true; sx = e.screenX; sy = e.screenY; }}
+                    }});
+                    window.addEventListener('mousemove', (e) => {{
+                        if (dDown && Math.hypot(e.screenX - sx, e.screenY - sy) >= 4) {{
+                            dDown = false;
+                            if (window.ipc) window.ipc.postMessage(JSON.stringify({{ action: 'pip_drag' }}));
+                        }}
+                    }});
+                    window.addEventListener('mouseup', () => {{ dDown = false; }});
+
+                    sh.getElementById('pipBack').addEventListener('click', () => {{
+                        const v = document.querySelector('video');
+                        const sec = Math.max(0, Math.floor((v && v.currentTime) || 0));
+                        if (window.ipc) window.ipc.postMessage(JSON.stringify({{ action: 'pip_return_to_tab', id: sec }}));
+                    }});
+                    sh.getElementById('pipClose').addEventListener('click', () => {{
+                        if (window.ipc) window.ipc.postMessage(JSON.stringify({{ action: 'pip_close' }}));
+                    }});
+                    document.body.appendChild(host);
+                }}
+            }}
+
+            setInterval(() => {{
+                installPipUi();
+                const player = document.getElementById('movie_player');
+                const vid = document.querySelector('video');
+                const isAd = Boolean(player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')));
+                if (isAd) {{
+                    wasInAd = true;
+                    if (vid) vid.muted = true;
+                    const skip = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
+                    if (skip) skip.click();
+                    if (vid && Number.isFinite(vid.duration) && vid.duration > 0.5 && vid.duration < 300) {{
+                        vid.currentTime = vid.duration;
+                    }}
+                }} else {{
+                    if (wasInAd && vid) {{
+                        wasInAd = false;
+                        vid.muted = false;
+                        if (vid.playbackRate > 2) vid.playbackRate = 1;
+                    }}
+                    if (vid && !seekApplied && startAt > 1 && vid.readyState >= 1) {{
+                        seekApplied = true;
+                        if (Math.abs((vid.currentTime || 0) - startAt) > 3) {{
+                            try {{ vid.currentTime = startAt; }} catch(e) {{}}
+                        }}
+                        try {{ vid.play(); }} catch(e) {{}}
+                    }}
+                }}
+            }}, 250);
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', installPipUi, {{ once: true }});
+            }} else {{
+                installPipUi();
+            }}
+        }})();
+        "##,
+        start_sec = start_sec
+    );
+
+    let mut st_mut = match state_rc.try_borrow_mut() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let state_for_pip_ipc = state_rc.clone();
+    let pip_wv_res = WebViewBuilder::new_with_web_context(&mut st_mut.web_context)
+        .with_autoplay(true)
+        .with_initialization_script(&pip_init_js)
+        .with_url(target_url)
+        .with_ipc_handler(move |req| {
+            if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
+                handle_ipc(&state_for_pip_ipc, msg);
+            }
+        })
+        .build_gtk(&root_box);
+
+    let Ok(pip_wv) = pip_wv_res else { return };
+    let inner = pip_wv.webview();
+    inner.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 1.0));
+    if let Some(wk_s) = WebViewExt::settings(&inner) {
+        wk_s.set_user_agent(Some(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        ));
+        wk_s.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
+        wk_s.set_enable_javascript(true);
+        wk_s.set_enable_mediasource(true);
+        wk_s.set_enable_encrypted_media(true);
+        wk_s.set_enable_webaudio(true);
+        wk_s.set_media_playback_requires_user_gesture(false);
+    }
+
+    let pip_rc = Rc::new(pip_wv);
+    st_mut.pip_window = Some((pip_win.clone(), pip_rc, origin_tab_id));
+    drop(st_mut);
+
+    let state_weak = Rc::downgrade(state_rc);
+    pip_win.connect_delete_event(move |_, _| {
+        if let Some(s_rc) = state_weak.upgrade() {
+            if let Ok(mut st) = s_rc.try_borrow_mut() {
+                st.pip_window = None;
+            }
+        }
+        glib::Propagation::Proceed
+    });
+
+    pip_win.show_all();
+    pip_win.present();
+}
+
 fn save_current_session(state_rc: &Rc<RefCell<BrowserState>>) {
     if let Ok(state) = state_rc.try_borrow() {
         let tabs: Vec<SessionTab> = state
@@ -2459,6 +2718,57 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 let _ = wv.evaluate_script("if (window._ferroToggleVideoPiP) window._ferroToggleVideoPiP();");
             }
         }
+        "open_pip_window" => {
+            if let Some(pip_url) = msg.url {
+                let sec = msg.id.unwrap_or(0);
+                let state_weak = Rc::downgrade(state_rc);
+                glib::idle_add_local_once(move || {
+                    if let Some(s_rc) = state_weak.upgrade() {
+                        open_floating_pip_window(&s_rc, &pip_url, sec);
+                    }
+                });
+            }
+        }
+        "pip_drag" => {
+            if let Ok(state) = state_rc.try_borrow() {
+                if let Some((pip_win, _, _)) = &state.pip_window {
+                    if let Some(display) = gdk::Display::default() {
+                        if let Some(seat) = display.default_seat() {
+                            if let Some(pointer) = seat.pointer() {
+                                let (_, x, y) = pointer.position();
+                                pip_win.begin_move_drag(1, x, y, gtk::current_event_time());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        "pip_close" => {
+            let old = state_rc.try_borrow_mut().ok().and_then(|mut st| st.pip_window.take());
+            if let Some((pip_win, _, _)) = old {
+                pip_win.close();
+            }
+        }
+        "pip_return_to_tab" => {
+            let resume_sec = msg.id.unwrap_or(0);
+            let old = state_rc.try_borrow_mut().ok().and_then(|mut st| st.pip_window.take());
+            if let Some((pip_win, _, origin_tid)) = old {
+                pip_win.close();
+                if let Some(tid) = origin_tid {
+                    switch_tab(state_rc, tid);
+                    let target_wv = state_rc.try_borrow().ok().and_then(|st| {
+                        st.window.present();
+                        st.tabs.iter().find(|t| t.id == tid).map(|t| t.webview.clone())
+                    });
+                    if let Some(wv) = target_wv {
+                        let _ = wv.evaluate_script(&format!(
+                            "if (window._ferroResumeFromPip) window._ferroResumeFromPip({});",
+                            resume_sec
+                        ));
+                    }
+                }
+            }
+        }
         "reorder_tabs" => {
             if let Some(order_str) = msg.url {
                 let ids: Vec<u32> = order_str
@@ -3267,7 +3577,7 @@ fn main() {
     if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
         std::env::set_var(
             "GST_PLUGIN_FEATURE_RANK",
-            "vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
+            "av1dec:NONE,vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
         );
     }
 
@@ -3375,6 +3685,7 @@ fn main() {
         last_lens_result_url: None,
         spare_tab: None,
         active_popover: None,
+        pip_window: None,
         win_fullscreen: false,
         css_provider,
         top_webview: None,

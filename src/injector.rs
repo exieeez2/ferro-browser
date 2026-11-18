@@ -169,24 +169,53 @@ pub const ADBLOCK_JS: &str = r#"
         } catch(e) {}
     }
 
+    // Prefer fast multi-threaded SIMD H.264 / VP9 over slow single-threaded libaom AV1 (`av01`)
+    // so 1080p60 / 1440p60 video on YouTube & Twitch plays at 60fps with zero dropped frames!
+    try {
+        if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {
+            const origIsSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
+            window.MediaSource.isTypeSupported = function(mime) {
+                if (typeof mime === 'string' && /av01/i.test(mime)) return false;
+                return origIsSupported(mime);
+            };
+        }
+        if (window.HTMLMediaElement && window.HTMLMediaElement.prototype.canPlayType) {
+            const origCanPlay = window.HTMLMediaElement.prototype.canPlayType;
+            window.HTMLMediaElement.prototype.canPlayType = function(mime) {
+                if (typeof mime === 'string' && /av01/i.test(mime)) return '';
+                return origCanPlay.call(this, mime);
+            };
+        }
+    } catch (e) {}
+
     if (ferroCfg.adblock_enabled === false) return;
 
     // On YouTube, never monkey-patch fetch/XHR/createElement (which triggers YouTube's anti-adblock
-    // player stall!); instead run a lightweight, undetectable pre-roll ad fast-forwarder.
+    // player stall!), and NEVER leave playbackRate elevated after an ad ends!
     if (/(^|\.)(youtube\.com|youtu\.be|googlevideo\.com)$/i.test(window.location.hostname || '')) {
+        let wasInAd = false;
+        let userMutedBeforeAd = false;
         setInterval(() => {
             try {
                 const player = document.getElementById('movie_player');
-                if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
+                const vid = player ? player.querySelector('video') : null;
+                const isAd = Boolean(player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')));
+                if (isAd) {
+                    if (vid && !wasInAd) {
+                        wasInAd = true;
+                        userMutedBeforeAd = vid.muted;
+                        vid.muted = true;
+                    }
                     const skip = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
                     if (skip) skip.click();
-                    const vid = player.querySelector('video');
+                    if (vid && Number.isFinite(vid.duration) && vid.duration > 0.5 && vid.duration < 300 && vid.currentTime < vid.duration - 0.15) {
+                        vid.currentTime = vid.duration;
+                    }
+                } else if (wasInAd) {
+                    wasInAd = false;
                     if (vid) {
-                        vid.muted = true;
-                        vid.playbackRate = 16;
-                        if (Number.isFinite(vid.duration) && vid.duration > 0.5 && vid.currentTime < vid.duration - 0.1) {
-                            vid.currentTime = vid.duration - 0.05;
-                        }
+                        vid.muted = userMutedBeforeAd;
+                        if (vid.playbackRate > 2) vid.playbackRate = 1;
                     }
                 }
                 const overlayClose = document.querySelector('.ytp-ad-overlay-close-button');
@@ -1712,43 +1741,262 @@ pub const CONTEXT_MENU_JS: &str = r##"
             });
     }
 
-    // Video Picture-in-Picture + Floating Mini-Player fallback
+    // Video Picture-in-Picture: True Always-on-Top OS Floating Window + Draggable Mini-Player
+    function resolvePopoutUrlForVideo(vid) {
+        const href = window.location.href || '';
+        const host = (window.location.hostname || '').toLowerCase();
+        const curSec = Math.max(0, Math.floor((vid && vid.currentTime) || 0));
+
+        // YouTube watch / shorts -> open clean watch URL synced to current second
+        if (host.includes('youtube.com') || host === 'youtu.be') {
+            try {
+                const u = new URL(href);
+                if (u.pathname === '/watch' && u.searchParams.get('v')) {
+                    const vidId = u.searchParams.get('v');
+                    return `https://www.youtube.com/watch?v=${encodeURIComponent(vidId)}${curSec > 1 ? `&t=${curSec}s` : ''}`;
+                }
+                if (u.pathname.startsWith('/shorts/')) {
+                    const parts = u.pathname.split('/').filter(Boolean);
+                    if (parts[1]) {
+                        return `https://www.youtube.com/watch?v=${encodeURIComponent(parts[1])}${curSec > 1 ? `&t=${curSec}s` : ''}`;
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // Direct non-blob HTTP(S) <video> stream
+        const src = (vid && (vid.currentSrc || vid.src)) || '';
+        if (src.startsWith('https://') || src.startsWith('http://')) {
+            return src;
+        }
+        return '';
+    }
+
+    window._ferroResumeFromPip = function(sec) {
+        const vid = window._ferroPipTargetVideo || document.querySelector('video');
+        if (vid) {
+            if (typeof sec === 'number' && sec > 0 && Number.isFinite(sec)) {
+                try { vid.currentTime = sec; } catch (e) {}
+            }
+            try { vid.play(); } catch (e) {}
+        }
+    };
+
     window._ferroToggleVideoPiP = function(targetVideo) {
+        if (window._ferro_is_pip_window) return;
         const vid = targetVideo || document.querySelector('video');
         if (!vid) {
             showToast('Видео на странице не найдено');
             return;
         }
-        try {
-            if (document.pictureInPictureElement) {
-                document.exitPictureInPicture();
-                return;
-            }
-            if (typeof vid.webkitSetPresentationMode === 'function') {
-                const cur = vid.webkitPresentationMode;
-                vid.webkitSetPresentationMode(cur === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
-                return;
-            }
-            if (typeof vid.requestPictureInPicture === 'function') {
-                vid.requestPictureInPicture().catch(() => toggleMiniDock(vid));
-                return;
-            }
-        } catch (e) {}
+
+        const popUrl = resolvePopoutUrlForVideo(vid);
+        if (popUrl && window.ipc) {
+            window._ferroPipTargetVideo = vid;
+            const sec = Math.max(0, Math.floor(vid.currentTime || 0));
+            try { vid.pause(); } catch (e) {}
+            postIpc({ action: 'open_pip_window', url: popUrl, id: sec });
+            return;
+        }
+
         toggleMiniDock(vid);
     };
 
     function toggleMiniDock(vid) {
+        const DOCK_BAR_ID = 'ferro-mini-dock-bar';
+        const existingBar = document.getElementById(DOCK_BAR_ID);
         if (vid.dataset.ferroMini === '1') {
             vid.style.cssText = vid.dataset.ferroOrigStyle || '';
             delete vid.dataset.ferroMini;
+            if (existingBar) existingBar.remove();
             showToast('Обычный режим видео');
         } else {
             vid.dataset.ferroOrigStyle = vid.getAttribute('style') || '';
             vid.dataset.ferroMini = '1';
-            vid.style.cssText = 'position:fixed !important;bottom:16px !important;right:16px !important;width:360px !important;height:203px !important;z-index:2147483646 !important;background:#000 !important;border:1px solid #3f3f4a !important;border-radius:8px !important;box-shadow:0 12px 34px rgba(0,0,0,0.75) !important;object-fit:contain !important;';
-            showToast('Мини-плеер поверх страницы включён');
+            let posX = Math.max(16, window.innerWidth - 404);
+            let posY = Math.max(46, window.innerHeight - 242);
+            const applyDockPos = () => {
+                vid.style.cssText = `position:fixed !important;left:${posX}px !important;top:${posY}px !important;width:384px !important;height:216px !important;z-index:2147483645 !important;background:#000 !important;border:1px solid rgba(255,255,255,0.2) !important;border-radius:10px !important;box-shadow:0 16px 42px rgba(0,0,0,0.78) !important;object-fit:contain !important;`;
+                if (bar) {
+                    bar.style.left = posX + 'px';
+                    bar.style.top = (posY - 28) + 'px';
+                }
+            };
+            const bar = document.createElement('div');
+            bar.id = DOCK_BAR_ID;
+            bar.style.cssText = `position:fixed;left:${posX}px;top:${posY - 28}px;width:384px;height:26px;z-index:2147483646;background:rgba(20,20,24,0.92);backdrop-filter:blur(10px);color:#f2f2f5;border:1px solid rgba(255,255,255,0.16);border-radius:8px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;font-family:Inter,sans-serif;font-size:11.5px;cursor:grab;user-select:none;`;
+            bar.innerHTML = `<span>Перетащить мини-окно</span><button type="button" style="border:none;background:transparent;color:#f2f2f5;cursor:pointer;font-size:12px;padding:2px 6px;">✕ Вернуть</button>`;
+            bar.querySelector('button').addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleMiniDock(vid);
+            });
+            let draggingDock = false, sx = 0, sy = 0;
+            bar.addEventListener('mousedown', (e) => {
+                if (e.target.tagName === 'BUTTON') return;
+                draggingDock = true;
+                sx = e.clientX - posX;
+                sy = e.clientY - posY;
+                e.preventDefault();
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!draggingDock) return;
+                posX = Math.max(8, Math.min(window.innerWidth - 392, e.clientX - sx));
+                posY = Math.max(34, Math.min(window.innerHeight - 224, e.clientY - sy));
+                applyDockPos();
+            });
+            window.addEventListener('mouseup', () => { draggingDock = false; });
+            (document.body || document.documentElement).appendChild(bar);
+            applyDockPos();
         }
     }
+
+    // Opera / Yandex / Firefox-style Floating Pop-out Pill at Top-Center of <video> on Hover!
+    (function installVideoHoverPopoutPill() {
+        if (window._ferro_is_pip_window || window.location.protocol === 'ferro:') return;
+        const PILL_HOST_ID = 'ferro-video-hover-pill-host';
+        let pillHost = null;
+        let pillBtn = null;
+        let hoveredVideo = null;
+        let hideTimer = null;
+        let overPill = false;
+
+        function ensurePill() {
+            if (pillHost && document.contains(pillHost)) return;
+            pillHost = document.createElement('div');
+            pillHost.id = PILL_HOST_ID;
+            pillHost.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483644;pointer-events:none;';
+            const shadow = pillHost.attachShadow({ mode: 'open' });
+            shadow.innerHTML = `
+                <style>
+                    .pip-pill {
+                        position: fixed;
+                        left: 0;
+                        top: 0;
+                        transform: translate3d(-50%, -6px, 0) scale(0.95);
+                        display: inline-flex;
+                        align-items: center;
+                        gap: 7px;
+                        height: 30px;
+                        padding: 0 12px 0 9px;
+                        background: rgba(18, 18, 23, 0.84);
+                        backdrop-filter: blur(12px);
+                        color: #f4f4f7;
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        border-radius: 999px;
+                        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.52);
+                        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                        font-size: 12px;
+                        font-weight: 500;
+                        cursor: pointer;
+                        pointer-events: none;
+                        opacity: 0;
+                        user-select: none;
+                        white-space: nowrap;
+                        transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1), transform 160ms cubic-bezier(0.23, 1, 0.32, 1), background 120ms ease, border-color 120ms ease;
+                    }
+                    .pip-pill.visible {
+                        opacity: 1;
+                        pointer-events: auto;
+                        transform: translate3d(-50%, 0, 0) scale(1);
+                    }
+                    .pip-pill:hover {
+                        background: rgba(34, 92, 224, 0.94);
+                        border-color: rgba(140, 185, 255, 0.65);
+                    }
+                    .pip-pill:active {
+                        transform: translate3d(-50%, 0, 0) scale(0.95);
+                    }
+                </style>
+                <button type="button" class="pip-pill" id="pipPillBtn" title="Вынести видео в отдельное окно поверх вкладок">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2.5"></rect>
+                        <rect x="12" y="10" width="9" height="7" rx="1.5" fill="currentColor"></rect>
+                    </svg>
+                    <span>Всплывающее окно</span>
+                </button>
+            `;
+            pillBtn = shadow.getElementById('pipPillBtn');
+            pillBtn.addEventListener('mouseenter', () => {
+                overPill = true;
+                clearTimeout(hideTimer);
+            });
+            pillBtn.addEventListener('mouseleave', () => {
+                overPill = false;
+                scheduleHide(400);
+            });
+            pillBtn.addEventListener('mousedown', (ev) => {
+                ev.stopPropagation();
+            });
+            pillBtn.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                const v = hoveredVideo;
+                hidePillImmediate();
+                if (v) window._ferroToggleVideoPiP(v);
+            });
+            (document.documentElement || document.body).appendChild(pillHost);
+        }
+
+        function hidePillImmediate() {
+            clearTimeout(hideTimer);
+            if (pillBtn) pillBtn.classList.remove('visible');
+        }
+
+        function scheduleHide(ms) {
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+                if (!overPill && pillBtn) pillBtn.classList.remove('visible');
+            }, ms);
+        }
+
+        function findVideoAtPoint(cx, cy) {
+            const vids = document.getElementsByTagName('video');
+            for (let i = 0; i < vids.length; i++) {
+                const v = vids[i];
+                if (v.dataset.ferroMini === '1') continue;
+                const r = v.getBoundingClientRect();
+                if (r.width < 200 || r.height < 120) continue;
+                if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+                    if (v.readyState >= 1 || v.currentSrc || v.src) {
+                        return { v, r };
+                    }
+                }
+            }
+            return null;
+        }
+
+        let lastCheck = 0;
+        window.addEventListener('mousemove', (ev) => {
+            const now = performance.now();
+            if (now - lastCheck < 45) return;
+            lastCheck = now;
+            if (overPill) return;
+            if (document.fullscreenElement) {
+                hidePillImmediate();
+                return;
+            }
+
+            const hit = findVideoAtPoint(ev.clientX, ev.clientY);
+            if (!hit) {
+                hoveredVideo = null;
+                hidePillImmediate();
+                return;
+            }
+
+            hoveredVideo = hit.v;
+            ensurePill();
+            const topY = Math.max(8, hit.r.top + 12);
+            const centerX = hit.r.left + hit.r.width / 2;
+            pillBtn.style.left = Math.round(centerX) + 'px';
+            pillBtn.style.top = Math.round(topY) + 'px';
+            pillBtn.classList.add('visible');
+            scheduleHide(1900);
+        }, { passive: true });
+
+        window.addEventListener('scroll', () => {
+            if (!overPill) hidePillImmediate();
+        }, { passive: true });
+    })();
 
     function captureVideoFramePng(vid) {
         try {

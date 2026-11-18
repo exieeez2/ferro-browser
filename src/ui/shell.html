@@ -1427,6 +1427,7 @@
 
     bmOverflowBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      updateBookmarksOverflow();
       const r = bmOverflowBtn.getBoundingClientRect();
       sendIpc({
         action: 'bookmarks_overflow_menu',
