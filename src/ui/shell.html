@@ -45,16 +45,17 @@
       --text-muted: #6b7280;
     }
 
-    /* When a vivid Firefox-style topbar preset (carbon/aurora/sunset/neon) is active,
-       keep text crisp light and use translucent glass layers so the gradient shines across the whole top panel */
+    /* When a vivid Firefox-style topbar preset (carbon/aurora/sunset/neon/nebula) is active,
+       keep text crisp light and use translucent glass layers so the gradient flows seamlessly into the page */
     .shell-container[data-preset="true"] {
       --text-primary: #f4f4f6;
-      --text-secondary: rgba(244, 244, 246, 0.78);
-      --text-muted: rgba(244, 244, 246, 0.56);
-      --border-hairline: rgba(255, 255, 255, 0.14);
-      --bg-hover: rgba(255, 255, 255, 0.12);
-      --bg-active: rgba(255, 255, 255, 0.18);
-      --bg-input: rgba(12, 12, 16, 0.58);
+      --text-secondary: rgba(244, 244, 246, 0.80);
+      --text-muted: rgba(244, 244, 246, 0.58);
+      --border-hairline: rgba(255, 255, 255, 0.08);
+      --bg-hover: rgba(255, 255, 255, 0.11);
+      --bg-active: rgba(255, 255, 255, 0.17);
+      --bg-input: rgba(8, 12, 18, 0.44);
+      border-bottom-color: rgba(255, 255, 255, 0.04);
     }
 
     * {
@@ -103,7 +104,7 @@
     }
 
     .shell-container[data-preset="true"] .tab-strip {
-      background: rgba(0, 0, 0, 0.22);
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0.22) 0%, rgba(0, 0, 0, 0.03) 100%);
     }
 
     .tabs-scroll-area {
@@ -275,8 +276,8 @@
     }
 
     .shell-container[data-preset="true"] .tab.active {
-      background: rgba(24, 24, 30, 0.56);
-      backdrop-filter: blur(8px);
+      background: rgba(255, 255, 255, 0.11);
+      backdrop-filter: blur(10px);
     }
 
     .tab-favicon {
@@ -406,7 +407,7 @@
     }
 
     .shell-container[data-preset="true"] .toolbar {
-      background: rgba(24, 24, 30, 0.34);
+      background: transparent;
     }
 
     .nav-group {
@@ -616,7 +617,7 @@
     }
 
     .shell-container[data-preset="true"] .bookmarks-bar {
-      background: rgba(24, 24, 30, 0.34);
+      background: transparent;
     }
 
     .bookmarks-items {
@@ -1779,32 +1780,42 @@
         root.style.setProperty('--radius-omni', omniRad + 'px');
         shellEl.setAttribute('data-rounded', rad > 2 ? 'true' : 'false');
 
-        // Top panel themes + Zen transparency
+        // Top panel themes + Zen transparency (seamless radial continuum with New Tab wallpapers!)
+        // Radial center at `X% 100%` on shell matches `X% 0%` on newtab so the boundary has 0 color jump.
         const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
         const topThemes = {
-          carbon: `linear-gradient(120deg, rgba(18, 18, 22, ${alpha}) 0%, rgba(45, 45, 52, ${alpha}) 50%, rgba(20, 20, 24, ${alpha}) 100%)`,
-          aurora: `linear-gradient(135deg, rgba(7, 25, 47, ${alpha}) 0%, rgba(22, 78, 99, ${alpha}) 50%, rgba(6, 95, 70, ${alpha}) 100%)`,
-          sunset: `linear-gradient(135deg, rgba(46, 16, 101, ${alpha}) 0%, rgba(126, 34, 206, ${alpha}) 52%, rgba(194, 65, 12, ${alpha}) 100%)`,
-          neon: `linear-gradient(135deg, rgba(9, 13, 22, ${alpha}) 0%, rgba(59, 7, 100, ${alpha}) 50%, rgba(15, 76, 129, ${alpha}) 100%)`
+          carbon: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
+          obsidian: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
+          aurora: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
+          forest: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
+          sunset: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(154, 52, 18, ${alpha}) 0%, rgba(88, 28, 135, ${alpha}) 48%, rgba(31, 18, 53, ${alpha}) 100%)`,
+          neon: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
+          cyberpunk: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
+          nebula: `radial-gradient(ellipse 95% 230% at 65% 100%, rgba(76, 29, 149, ${alpha}) 0%, rgba(30, 27, 75, ${alpha}) 50%, rgba(11, 10, 26, ${alpha}) 100%)`
         };
 
-        const preset = s.top_panel_theme || 'default';
-        if (topThemes[preset]) {
+        const rawTop = s.top_panel_theme || 'default';
+        const rawWp = s.wallpaper_type || 'none';
+        const effectivePreset = (rawTop !== 'default' && topThemes[rawTop])
+          ? rawTop
+          : (topThemes[rawWp] ? rawWp : 'default');
+
+        if (topThemes[effectivePreset]) {
           shellEl.setAttribute('data-preset', 'true');
-          shellEl.style.background = topThemes[preset];
+          shellEl.style.background = topThemes[effectivePreset];
           root.style.removeProperty('--bg-strip');
           root.style.removeProperty('--bg-toolbar');
         } else {
           shellEl.setAttribute('data-preset', 'false');
           if (isLight) {
-            const stripBg = `rgba(223, 225, 229, ${alpha})`;
-            const toolBg = `rgba(241, 243, 244, ${alpha})`;
+            const stripBg = `rgba(229, 231, 235, ${alpha})`;
+            const toolBg = `rgba(244, 244, 246, ${alpha})`;
             root.style.setProperty('--bg-strip', stripBg);
             root.style.setProperty('--bg-toolbar', toolBg);
             shellEl.style.background = stripBg;
           } else {
-            const stripBg = `rgba(17, 17, 17, ${alpha})`;
-            const toolBg = `rgba(28, 28, 28, ${alpha})`;
+            const stripBg = `rgba(14, 14, 15, ${alpha})`;
+            const toolBg = `rgba(20, 20, 20, ${alpha})`;
             root.style.setProperty('--bg-strip', stripBg);
             root.style.setProperty('--bg-toolbar', toolBg);
             shellEl.style.background = stripBg;

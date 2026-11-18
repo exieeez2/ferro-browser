@@ -985,24 +985,28 @@
           </div>
           <div class="preset-grid">
             <div class="preset-card active" data-topbar="default">
-              <div class="preset-thumb" style="background:#1c1c1c;"><div class="mock-tab"></div></div>
+              <div class="preset-thumb" style="background:#141414;"><div class="mock-tab"></div></div>
               <div class="preset-label">Монохром</div>
             </div>
             <div class="preset-card" data-topbar="carbon">
-              <div class="preset-thumb" style="background:linear-gradient(120deg, #141418, #2d2d34, #18181c);"><div class="mock-tab"></div></div>
-              <div class="preset-label">Карбон</div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 130% at 35% 100%, #323442 0%, #1e2029 50%, #121318 100%);"><div class="mock-tab"></div></div>
+              <div class="preset-label">Обсидиан</div>
             </div>
             <div class="preset-card" data-topbar="aurora">
-              <div class="preset-thumb" style="background:linear-gradient(135deg, #07192f, #164e63, #065f46);"><div class="mock-tab"></div></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 130% at 35% 100%, #115e59 0%, #0b3b3c 48%, #071c21 100%);"><div class="mock-tab"></div></div>
               <div class="preset-label">Северное сияние</div>
             </div>
             <div class="preset-card" data-topbar="sunset">
-              <div class="preset-thumb" style="background:linear-gradient(135deg, #2e1065, #7e22ce, #c2410c);"><div class="mock-tab"></div></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 130% at 50% 100%, #9a3412 0%, #581c87 48%, #1f1235 100%);"><div class="mock-tab"></div></div>
               <div class="preset-label">Закат</div>
             </div>
             <div class="preset-card" data-topbar="neon">
-              <div class="preset-thumb" style="background:linear-gradient(135deg, #090d16, #3b0764, #0f4c81);"><div class="mock-tab"></div></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 130% at 50% 100%, #5b21b6 0%, #1e295b 50%, #0b1329 100%);"><div class="mock-tab"></div></div>
               <div class="preset-label">Кибернеон</div>
+            </div>
+            <div class="preset-card" data-topbar="nebula">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 130% at 65% 100%, #4c1d95 0%, #1e1b4b 50%, #0b0a1a 100%);"><div class="mock-tab"></div></div>
+              <div class="preset-label">Космос</div>
             </div>
           </div>
         </div>
@@ -1055,21 +1059,25 @@
               <div class="preset-thumb" style="background:#141414; align-items:center; justify-content:center; color:var(--text-muted); font-family:var(--font-mono); font-size:11px;">ВЫКЛ</div>
               <div class="preset-label">Без фона</div>
             </div>
+            <div class="preset-card wp-card" data-wp="obsidian" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #323442 0%, #1e2029 50%, #121318 100%);"></div>
+              <div class="preset-label">Обсидиан</div>
+            </div>
             <div class="preset-card wp-card" data-wp="forest" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse at 25% 20%, #134e4a 0%, #062c28 50%, #090f14 100%);"></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #115e59 0%, #0b3b3c 48%, #071c21 100%);"></div>
               <div class="preset-label">Северный лес</div>
             </div>
+            <div class="preset-card wp-card" data-wp="sunset" data-url="">
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #9a3412 0%, #581c87 48%, #1f1235 100%);"></div>
+              <div class="preset-label">Закат</div>
+            </div>
             <div class="preset-card wp-card" data-wp="cyberpunk" data-url="">
-              <div class="preset-thumb" style="background:linear-gradient(135deg, #3b0764 0%, #7e22ce 42%, #0e7490 100%);"></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #5b21b6 0%, #1e295b 50%, #0b1329 100%);"></div>
               <div class="preset-label">Кибернеон</div>
             </div>
             <div class="preset-card wp-card" data-wp="nebula" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(circle at 75% 25%, #4c1d95 0%, #1e1b4b 48%, #09090f 100%);"></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 65% 0%, #4c1d95 0%, #1e1b4b 50%, #0b0a1a 100%);"></div>
               <div class="preset-label">Космос</div>
-            </div>
-            <div class="preset-card wp-card" data-wp="obsidian" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(circle at 30% 25%, #2e2e38 0%, #16161b 60%, #0c0c0e 100%);"></div>
-              <div class="preset-label">Обсидиан</div>
             </div>
           </div>
 
@@ -1653,9 +1661,32 @@
       }
     });
 
+    const TOPBAR_TO_WP = {
+      default: 'none',
+      carbon: 'obsidian',
+      aurora: 'forest',
+      sunset: 'sunset',
+      neon: 'cyberpunk',
+      nebula: 'nebula'
+    };
+
+    const WP_TO_TOPBAR = {
+      none: 'default',
+      obsidian: 'carbon',
+      forest: 'aurora',
+      sunset: 'sunset',
+      cyberpunk: 'neon',
+      nebula: 'nebula'
+    };
+
     document.querySelectorAll('[data-topbar]').forEach(c => {
       c.addEventListener('click', () => {
-        settings.top_panel_theme = c.dataset.topbar;
+        const tb = c.dataset.topbar;
+        settings.top_panel_theme = tb;
+        if (settings.wallpaper_type !== 'custom' && TOPBAR_TO_WP[tb]) {
+          settings.wallpaper_type = TOPBAR_TO_WP[tb];
+          settings.wallpaper_url = '';
+        }
         applyStateToUi();
         saveSettings();
       });
@@ -1683,8 +1714,12 @@
 
     document.querySelectorAll('.wp-card').forEach(c => {
       c.addEventListener('click', () => {
-        settings.wallpaper_type = c.dataset.wp;
+        const wp = c.dataset.wp;
+        settings.wallpaper_type = wp;
         settings.wallpaper_url = c.dataset.url || '';
+        if (WP_TO_TOPBAR[wp]) {
+          settings.top_panel_theme = WP_TO_TOPBAR[wp];
+        }
         applyStateToUi();
         saveSettings();
       });

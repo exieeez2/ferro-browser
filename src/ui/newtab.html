@@ -1018,11 +1018,29 @@
       }
     });
 
-    const WALLPAPER_GRADIENTS = {
-      forest: 'radial-gradient(ellipse at 25% 20%, #134e4a 0%, #062c28 48%, #090f14 100%)',
-      cyberpunk: 'linear-gradient(135deg, #3b0764 0%, #7e22ce 42%, #0e7490 100%)',
-      nebula: 'radial-gradient(circle at 75% 22%, #4c1d95 0%, #1e1b4b 48%, #09090f 100%)',
-      obsidian: 'radial-gradient(circle at 30% 25%, #2e2e38 0%, #16161b 60%, #0c0c0e 100%)'
+    // Seamless radial continuum with top panel (`at X% 0%` matches `at X% 100%` of shell.html 1:1!)
+    function getWallpaperGradients(alpha) {
+      return {
+        obsidian: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
+        carbon: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
+        forest: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
+        aurora: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
+        sunset: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(154, 52, 18, ${alpha}) 0%, rgba(88, 28, 135, ${alpha}) 48%, rgba(31, 18, 53, ${alpha}) 100%)`,
+        cyberpunk: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
+        neon: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
+        nebula: `radial-gradient(ellipse 95% 82% at 65% 0%, rgba(76, 29, 149, ${alpha}) 0%, rgba(30, 27, 75, ${alpha}) 50%, rgba(11, 10, 26, ${alpha}) 100%)`
+      };
+    }
+
+    const THEME_CARD_TINTS = {
+      obsidian: { elevated: 'rgba(24, 26, 34, 0.62)', hover: 'rgba(38, 40, 52, 0.72)' },
+      carbon: { elevated: 'rgba(24, 26, 34, 0.62)', hover: 'rgba(38, 40, 52, 0.72)' },
+      forest: { elevated: 'rgba(9, 34, 38, 0.56)', hover: 'rgba(15, 52, 56, 0.68)' },
+      aurora: { elevated: 'rgba(9, 34, 38, 0.56)', hover: 'rgba(15, 52, 56, 0.68)' },
+      sunset: { elevated: 'rgba(36, 16, 56, 0.56)', hover: 'rgba(58, 24, 84, 0.68)' },
+      cyberpunk: { elevated: 'rgba(16, 22, 48, 0.56)', hover: 'rgba(28, 36, 74, 0.68)' },
+      neon: { elevated: 'rgba(16, 22, 48, 0.56)', hover: 'rgba(28, 36, 74, 0.68)' },
+      nebula: { elevated: 'rgba(18, 15, 44, 0.58)', hover: 'rgba(30, 25, 68, 0.70)' }
     };
 
     const wallpaperEl = document.getElementById('wallpaperBg');
@@ -1075,17 +1093,34 @@
 
       // Apply instant GPU wallpaper or custom image & Zen transparency
       const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
-      const presetGrad = WALLPAPER_GRADIENTS[s.wallpaper_type];
-      const customUrl = (s.wallpaper_type === 'custom' && s.wallpaper_url) ? s.wallpaper_url : '';
+      const gradients = getWallpaperGradients(alpha);
+      const rawWp = s.wallpaper_type || 'none';
+      const rawTop = s.top_panel_theme || 'default';
+      const effectiveWpKey = (rawWp !== 'none' && rawWp !== 'custom' && gradients[rawWp])
+        ? rawWp
+        : ((rawWp === 'none' && rawTop !== 'default' && gradients[rawTop]) ? rawTop : '');
+      const presetGrad = effectiveWpKey ? gradients[effectiveWpKey] : '';
+      const customUrl = (rawWp === 'custom' && s.wallpaper_url) ? s.wallpaper_url : '';
 
       if (presetGrad) {
+        state.theme = 'dark';
+        root.setAttribute('data-theme', 'dark');
+        page.setAttribute('data-theme', 'dark');
+        const tint = THEME_CARD_TINTS[effectiveWpKey];
+        if (tint) {
+          root.style.setProperty('--bg-elevated', tint.elevated);
+          root.style.setProperty('--bg-hover', tint.hover);
+        }
         wallpaperEl.style.backgroundImage = presetGrad;
-        wallpaperEl.style.filter = `blur(${s.wallpaper_blur || 0}px) brightness(${s.wallpaper_brightness || 80}%)`;
+        const blurPx = Number(s.wallpaper_blur || 0);
+        wallpaperEl.style.filter = blurPx > 0 ? `blur(${blurPx}px)` : 'none';
         wallpaperEl.classList.add('active');
         root.style.background = 'transparent';
         document.body.style.background = 'transparent';
         page.style.background = 'transparent';
       } else if (customUrl) {
+        root.style.removeProperty('--bg-elevated');
+        root.style.removeProperty('--bg-hover');
         wallpaperEl.style.backgroundImage = `url("${customUrl}")`;
         wallpaperEl.style.filter = `blur(${s.wallpaper_blur || 0}px) brightness(${s.wallpaper_brightness || 80}%)`;
         wallpaperEl.classList.add('active');
@@ -1093,6 +1128,8 @@
         document.body.style.background = 'transparent';
         page.style.background = 'transparent';
       } else {
+        root.style.removeProperty('--bg-elevated');
+        root.style.removeProperty('--bg-hover');
         wallpaperEl.classList.remove('active');
         wallpaperEl.style.backgroundImage = 'none';
         if (alpha < 1) {
