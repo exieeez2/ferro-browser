@@ -2782,25 +2782,73 @@ fn clean_stale_profile_locks(dir: &std::path::Path) {
     let _ = std::fs::remove_file(dir.join("hsts-storage.sqlite-wal"));
 }
 
+fn current_binary_stamp() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format!("{}:{}", d.as_secs(), d.subsec_nanos()))
+        .unwrap_or_default()
+}
+
 fn ensure_single_instance() -> Option<std::os::unix::net::UnixListener> {
     use std::io::Write;
     use std::os::unix::net::{UnixListener, UnixStream};
 
-    let sock_path = dirs::config_dir()
+    let ferro_dir = dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("ferro")
-        .join("instance.sock");
+        .join("ferro");
+    let _ = std::fs::create_dir_all(&ferro_dir);
 
-    if let Some(parent) = sock_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let sock_path = ferro_dir.join("instance.sock");
+    let meta_path = ferro_dir.join("instance.meta");
+    let my_stamp = current_binary_stamp();
+    let force_replace = std::env::args().any(|a| a == "--replace" || a == "-r");
+
+    let write_meta = || {
+        let _ = std::fs::write(&meta_path, format!("{}\n{}", std::process::id(), my_stamp));
+    };
 
     match UnixListener::bind(&sock_path) {
         Ok(listener) => {
             let _ = listener.set_nonblocking(true);
+            write_meta();
             Some(listener)
         }
         Err(_) => {
+            // Check if running instance is an older compiled binary
+            let mut should_replace = force_replace;
+            let mut old_pid: Option<u32> = None;
+            if let Ok(raw) = std::fs::read_to_string(&meta_path) {
+                let mut lines = raw.lines();
+                old_pid = lines.next().and_then(|s| s.trim().parse::<u32>().ok());
+                let old_stamp = lines.next().unwrap_or("").trim();
+                if !my_stamp.is_empty() && old_stamp != my_stamp {
+                    should_replace = true;
+                }
+            } else {
+                // Pre-upgrade instance without instance.meta -> replace it with the new build!
+                should_replace = true;
+            }
+
+            if should_replace {
+                println!("[Ferro] Detected updated build — restarting older Ferro instance...");
+                if let Ok(mut stream) = UnixStream::connect(&sock_path) {
+                    let _ = stream.write_all(b"QUIT\n");
+                }
+                if let Some(pid) = old_pid {
+                    let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(220));
+                let _ = std::fs::remove_file(&sock_path);
+                if let Ok(listener) = UnixListener::bind(&sock_path) {
+                    let _ = listener.set_nonblocking(true);
+                    write_meta();
+                    return Some(listener);
+                }
+            }
+
             if let Ok(mut stream) = UnixStream::connect(&sock_path) {
                 println!("[Ferro] Already running. Focusing existing window.");
                 let _ = stream.write_all(b"FOCUS\n");
@@ -2809,6 +2857,7 @@ fn ensure_single_instance() -> Option<std::os::unix::net::UnixListener> {
                 let _ = std::fs::remove_file(&sock_path);
                 if let Ok(listener) = UnixListener::bind(&sock_path) {
                     let _ = listener.set_nonblocking(true);
+                    write_meta();
                     Some(listener)
                 } else {
                     None
@@ -2847,7 +2896,9 @@ fn main() {
                 let mut buf = [0u8; 64];
                 if let Ok(n) = stream.read(&mut buf) {
                     let msg = String::from_utf8_lossy(&buf[..n]);
-                    if msg.contains("FOCUS") {
+                    if msg.contains("QUIT") {
+                        win_clone.close();
+                    } else if msg.contains("FOCUS") {
                         win_clone.deiconify();
                         win_clone.present();
                     }

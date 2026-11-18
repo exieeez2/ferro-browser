@@ -2,3 +2,11 @@
 **/*.rs.bk
 *.swp
 .DS_Store
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/*.jks
+*.apk
