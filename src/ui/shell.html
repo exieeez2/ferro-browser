@@ -1589,14 +1589,48 @@
       tabsScrollArea.scrollBy({ left: 180, behavior: 'smooth' });
     });
 
-    // Double-click empty tab strip space to maximize/restore, drag to move window
-    document.getElementById('stripDragSpacer').addEventListener('dblclick', () => {
-      sendIpc({ action: 'window_max' });
+    // Double-click ANY empty tab strip space to maximize/restore; drag >= 6px to move window!
+    // (Never call window_drag on initial mousedown — otherwise Wayland steals pointer grab and kills dblclick!)
+    const tabStripEl = document.getElementById('tabStrip');
+    let stripDown = false;
+    let stripStartX = 0;
+    let stripStartY = 0;
+
+    function isEmptyStripArea(target) {
+      return !target.closest('.tab, button, .strip-left-tools, .window-controls');
+    }
+
+    tabStripEl.addEventListener('dblclick', (e) => {
+      if (isEmptyStripArea(e.target)) {
+        stripDown = false;
+        sendIpc({ action: 'window_max' });
+      }
     });
-    document.getElementById('stripDragSpacer').addEventListener('mousedown', (e) => {
-      if (e.button === 0) {
+
+    tabStripEl.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && e.detail === 1 && isEmptyStripArea(e.target)) {
+        stripDown = true;
+        stripStartX = e.screenX;
+        stripStartY = e.screenY;
+      } else {
+        stripDown = false;
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!stripDown) return;
+      if ((e.buttons & 1) === 0) {
+        stripDown = false;
+        return;
+      }
+      if (Math.hypot(e.screenX - stripStartX, e.screenY - stripStartY) >= 6) {
+        stripDown = false;
         sendIpc({ action: 'window_drag' });
       }
+    });
+
+    window.addEventListener('mouseup', () => {
+      stripDown = false;
     });
 
     document.getElementById('newTabBtn').addEventListener('click', () => {

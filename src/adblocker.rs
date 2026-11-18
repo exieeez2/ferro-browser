@@ -32,10 +32,6 @@ pub const UBLOCK_CORE_RULES: &str = r#"
 /pagead/
 /googleads.js
 ||googletagservices.com/tag/js/gpt.js
-||googlevideo.com/videoplayback*&adformat=
-||youtube.com/api/stats/ads*
-||youtube.com/pagead/*
-||youtube.com/get_midroll_info*
 
 ! Yandex Direct, RTB, Metrika, Mail.Ru, VK Ads
 ||an.yandex.ru^
@@ -1005,7 +1001,21 @@ impl AdBlocker {
 
         match filter_set.into_content_blocking() {
             Ok((rules, _)) => {
-                serde_json::to_vec(&rules).unwrap_or_else(|_| b"[]".to_vec())
+                let mut val = serde_json::to_value(&rules).unwrap_or_else(|_| serde_json::json!([]));
+                if let Some(arr) = val.as_array_mut() {
+                    // Exempt YouTube & GoogleVideo from network-level ContentBlocker breaks so YouTube's
+                    // 2025/2026 anti-adblock check never stalls #movie_player on a blank screen!
+                    arr.push(serde_json::json!({
+                        "trigger": {
+                            "url-filter": ".*",
+                            "if-domain": ["*youtube.com", "*youtu.be", "*googlevideo.com", "*ytimg.com"]
+                        },
+                        "action": {
+                            "type": "ignore-previous-rules"
+                        }
+                    }));
+                }
+                serde_json::to_vec(&val).unwrap_or_else(|_| b"[]".to_vec())
             }
             Err(_) => b"[]".to_vec(),
         }

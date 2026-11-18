@@ -171,6 +171,31 @@ pub const ADBLOCK_JS: &str = r#"
 
     if (ferroCfg.adblock_enabled === false) return;
 
+    // On YouTube, never monkey-patch fetch/XHR/createElement (which triggers YouTube's anti-adblock
+    // player stall!); instead run a lightweight, undetectable pre-roll ad fast-forwarder.
+    if (/(^|\.)(youtube\.com|youtu\.be|googlevideo\.com)$/i.test(window.location.hostname || '')) {
+        setInterval(() => {
+            try {
+                const player = document.getElementById('movie_player');
+                if (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) {
+                    const skip = document.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
+                    if (skip) skip.click();
+                    const vid = player.querySelector('video');
+                    if (vid) {
+                        vid.muted = true;
+                        vid.playbackRate = 16;
+                        if (Number.isFinite(vid.duration) && vid.duration > 0.5 && vid.currentTime < vid.duration - 0.1) {
+                            vid.currentTime = vid.duration - 0.05;
+                        }
+                    }
+                }
+                const overlayClose = document.querySelector('.ytp-ad-overlay-close-button');
+                if (overlayClose) overlayClose.click();
+            } catch (e) {}
+        }, 250);
+        return;
+    }
+
     const AD_DOMAINS = [
         'doubleclick.', 'googlesyndication.', 'googleadservices.', 'googleads.', 'pagead',
         'adservice.google', 'googletagservices.', 'googletagmanager.', 'google-analytics.',

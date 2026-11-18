@@ -115,7 +115,11 @@ pub fn add_user_style_sheet(ucm: &webkit2gtk::UserContentManager, css: &str) {
         webkit2gtk::UserContentInjectedFrames::AllFrames,
         webkit2gtk::UserStyleLevel::User,
         &[],
-        &[],
+        &[
+            "https://*.youtube.com/*",
+            "https://youtube.com/*",
+            "https://youtu.be/*",
+        ],
     );
     ucm.add_style_sheet(&stylesheet);
 }

@@ -78,6 +78,7 @@ pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
 /// `Origin: https://lens.google.com` & `Referer: https://lens.google.com/` headers so Google
 /// responds with `303 See Other` -> `https://www.google.com/search?vsrid=...&udm=26...&hl=ru`
 /// instead of `403 Forbidden`.
+#[allow(dead_code)]
 pub fn upload_png_to_google_lens(png_bytes: &[u8]) -> Option<String> {
     if png_bytes.len() < 24 {
         return None;
@@ -127,13 +128,10 @@ pub fn upload_png_to_google_lens(png_bytes: &[u8]) -> Option<String> {
     None
 }
 
-/// Downloads an external image URL and uploads its bytes to Google Lens `v3/upload`
-/// (works even on hotlink-protected or non-indexed images!).
-pub fn upload_url_to_google_lens(img_url: &str) -> Option<String> {
+/// Downloads an external image URL's raw bytes (works even on hotlink-protected images).
+pub fn download_image_bytes(img_url: &str) -> Option<Vec<u8>> {
     if let Some(rest) = img_url.strip_prefix("data:") {
-        if let Some(bytes) = base64_decode(rest) {
-            return upload_png_to_google_lens(&bytes);
-        }
+        return base64_decode(rest);
     }
 
     let seq = LENS_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -157,13 +155,147 @@ pub fn upload_url_to_google_lens(img_url: &str) -> Option<String> {
     if dl_ok {
         if let Ok(bytes) = fs::read(&dl_path) {
             let _ = fs::remove_file(&dl_path);
-            if let Some(res_url) = upload_png_to_google_lens(&bytes) {
-                return Some(res_url);
+            if bytes.len() >= 24 {
+                return Some(bytes);
             }
         }
     }
     let _ = fs::remove_file(&dl_path);
     None
+}
+
+/// Renders an in-session Google Lens uploader document meant to be loaded via
+/// `webview.load_html(&html, Some("https://lens.google.com/"))` so that:
+/// 1) `window.origin` is `https://lens.google.com` (zero 403 error!)
+/// 2) WebKit sends the Side Panel's exact Google Account cookies (`SID`/`SAPISID`) so
+///    the resulting `vsrid` image token belongs to the logged-in user and never shows as broken!
+pub fn render_lens_in_session_upload_html(b64_img: &str, fallback_url: &str) -> String {
+    let clean_b64 = b64_img
+        .split(',')
+        .last()
+        .unwrap_or(b64_img)
+        .trim();
+    let b64_json = serde_json::to_string(clean_b64).unwrap_or_else(|_| "\"\"".to_string());
+    let fb_json = serde_json::to_string(fallback_url).unwrap_or_else(|_| "\"\"".to_string());
+
+    let preview_tag = if clean_b64.len() > 24 {
+        format!(
+            r#"<div class="preview-box"><img src="data:image/png;base64,{}" alt="" /><div class="scan-line"></div></div>"#,
+            clean_b64
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Google Объектив</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: #141417;
+      color: #f2f2f5;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 18px;
+      overflow: hidden;
+    }}
+    .preview-box {{
+      position: relative;
+      max-width: 280px;
+      max-height: 240px;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.14);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+    }}
+    .preview-box img {{
+      display: block;
+      max-width: 280px;
+      max-height: 240px;
+      object-fit: contain;
+      background: #0d0d10;
+    }}
+    @keyframes scanMove {{
+      0% {{ top: 0%; opacity: 0.9; }}
+      50% {{ top: 96%; opacity: 1; }}
+      100% {{ top: 0%; opacity: 0.9; }}
+    }}
+    .scan-line {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, #4285f4, #a142f4, #34a853, #fbbc05);
+      box-shadow: 0 0 12px rgba(66, 133, 244, 0.9);
+      animation: scanMove 1.6s ease-in-out infinite;
+    }}
+    .status {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: #d4d4dc;
+      font-weight: 500;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    .spinner {{
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.18);
+      border-top-color: #4285f4;
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }}
+    form {{ display: none; }}
+  </style>
+</head>
+<body>
+  {preview_tag}
+  <div class="status">
+    <div class="spinner"></div>
+    <span>Поиск в Google Объективе...</span>
+  </div>
+  <form id="lensForm" method="POST" enctype="multipart/form-data" action="https://lens.google.com/v3/upload?hl=ru&re=df&ep=gsbubb">
+    <input type="file" name="encoded_image" id="lensFile" />
+  </form>
+  <script>
+    (function() {{
+      const b64 = {b64_json};
+      const fb = {fb_json};
+      if (b64 && b64.length > 24) {{
+        try {{
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          let mime = 'image/png';
+          let ext = 'png';
+          if (bytes[0] === 0xFF && bytes[1] === 0xD8) {{ mime = 'image/jpeg'; ext = 'jpg'; }}
+          else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {{ mime = 'image/webp'; ext = 'webp'; }}
+          const file = new File([bytes], 'lens.' + ext, {{ type: mime }});
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          document.getElementById('lensFile').files = dt.files;
+          setTimeout(() => document.getElementById('lensForm').submit(), 25);
+          return;
+        }} catch (e) {{}}
+      }}
+      if (fb && (fb.startsWith('http://') || fb.startsWith('https://'))) {{
+        window.location.replace('https://lens.google.com/uploadbyurl?hl=ru&url=' + encodeURIComponent(fb));
+      }}
+    }})();
+  </script>
+</body>
+</html>"##
+    )
 }
 
 /// Sleek dark loading state displayed in the Side Panel for ~300ms while `curl` uploads the crop.

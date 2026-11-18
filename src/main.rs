@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use webkit2gtk::{
     CacheModel, DownloadExt, FindControllerExt, FindOptions, HardwareAccelerationPolicy, LoadEvent,
     NavigationPolicyDecision, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType,
-    PrintOperation, PrintOperationExt, SettingsExt, URIRequestExt, WebContextExt, WebInspectorExt,
-    WebViewExt, WebsiteDataManagerExtManual, WebsiteDataTypes,
+    PrintOperation, PrintOperationExt, SettingsExt, SnapshotOptions, SnapshotRegion, URIRequestExt,
+    WebContextExt, WebInspectorExt, WebViewExt, WebsiteDataManagerExtManual, WebsiteDataTypes,
 };
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
@@ -32,9 +32,9 @@ use downloads::DownloadsData;
 use history::HistoryData;
 use importer::BrowserImporter;
 use lens::{
-    base64_decode, base64_encode, render_bookmarks_panel_html, render_lens_loading_html,
-    render_side_header_html, render_sleeping_tab_html, upload_png_to_google_lens,
-    upload_url_to_google_lens,
+    base64_encode, download_image_bytes, render_bookmarks_panel_html,
+    render_lens_in_session_upload_html, render_lens_loading_html, render_side_header_html,
+    render_sleeping_tab_html,
 };
 use passwords::PasswordsData;
 use session::{SessionData, SessionTab};
@@ -86,6 +86,7 @@ struct BrowserState {
     last_lens_result_url: Option<String>,
     spare_tab: Option<PrewarmedTab>,
     active_popover: Option<gtk::Popover>,
+    win_fullscreen: bool,
     css_provider: gtk::CssProvider,
     top_webview: Option<Rc<WebView>>,
     tabs: Vec<Tab>,
@@ -741,6 +742,19 @@ fn ensure_and_open_side_panel(state_rc: &Rc<RefCell<BrowserState>>, mode: &str, 
                     }
                     false
                 });
+                let state_weak_uri = Rc::downgrade(state_rc);
+                inner.connect_uri_notify(move |wv| {
+                    if let Some(uri) = wv.uri() {
+                        let u = uri.to_string();
+                        if u.starts_with("https://www.google.com/search") || u.contains("vsrid=") {
+                            if let Some(s_rc) = state_weak_uri.upgrade() {
+                                if let Ok(mut st) = s_rc.try_borrow_mut() {
+                                    st.last_lens_result_url = Some(u);
+                                }
+                            }
+                        }
+                    }
+                });
                 st.side_webview = Some(Rc::new(body_wv));
             }
         }
@@ -1031,6 +1045,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
 
             function injectCosmeticStyle() {{
                 if (window.location.protocol === 'ferro:') return;
+                if (/(^|\.)(youtube\.com|youtu\.be|googlevideo\.com)$/i.test(window.location.hostname || '')) return;
                 const id = 'ferro-adblock-cosmetic';
                 if (!document.getElementById(id)) {{
                     const root = document.head || document.documentElement;
@@ -1304,6 +1319,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     let state_for_tab_ipc = state_rc.clone();
     let builder = builder
         .with_initialization_script(&init_script)
+        .with_autoplay(true)
         .with_transparent(true)
         .with_ipc_handler(move |req| {
             match serde_json::from_str::<IpcMessage>(req.body()) {
@@ -1358,6 +1374,8 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         settings.set_enable_media_stream(true);
         settings.set_enable_mediasource(true);
         settings.set_enable_encrypted_media(true);
+        settings.set_enable_webaudio(true);
+        settings.set_media_playback_requires_user_gesture(false);
     }
 
     // Attach native WebKit uBlock content blocking filter and cosmetic user style sheet
@@ -1530,7 +1548,8 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
                     if let Some(req) = nav.request() {
                         if let Some(uri) = req.uri() {
                             let uri_str = uri.as_str();
-                            if adblocker_policy.should_block_url(uri_str) {
+                            let is_yt = uri_str.contains("youtube.com") || uri_str.contains("youtu.be") || uri_str.contains("googlevideo.com");
+                            if !is_yt && adblocker_policy.should_block_url(uri_str) {
                                 adblocker_policy.increment_blocked();
                                 decision.ignore();
                                 return true;
@@ -1564,53 +1583,48 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
 
 fn spawn_lens_background_search(
     state_rc: &Rc<RefCell<BrowserState>>,
-    png_bytes: Option<Vec<u8>>,
+    b64_img: String,
     fallback_url: String,
-    preview_b64: String,
 ) {
-    if let Ok(st) = state_rc.try_borrow() {
-        if let Ok(mut guard) = st.lens_preview.lock() {
-            *guard = preview_b64;
+    // If we already have base64 image bytes (from Wayland WebKit snapshot or canvas),
+    // submit immediately inside side_webview with base_uri = "https://lens.google.com/"
+    // so both Origin AND the user's Google Account cookies match 100%!
+    let clean = b64_img.split(',').last().unwrap_or(&b64_img).trim().to_string();
+    if clean.len() > 24 {
+        ensure_and_open_side_panel(state_rc, "lens", "");
+        let side_wv = state_rc.try_borrow().ok().and_then(|st| st.side_webview.clone());
+        if let Some(wv) = side_wv {
+            let html = render_lens_in_session_upload_html(&clean, &fallback_url);
+            wv.webview().load_html(&html, Some("https://lens.google.com/"));
         }
+        return;
     }
-    ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-loading");
 
+    // External image URL fallback: show loading preview, download image bytes in background,
+    // then submit inside side_webview's Google session!
+    ensure_and_open_side_panel(state_rc, "lens", "ferro://lens-loading");
     let state_weak = Rc::downgrade(state_rc);
-    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let fb_copy = fallback_url.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     std::thread::spawn(move || {
-        let mut resolved = None;
-        if let Some(bytes) = png_bytes {
-            resolved = upload_png_to_google_lens(&bytes);
-        }
-        if resolved.is_none() && !fallback_url.is_empty() {
-            resolved = upload_url_to_google_lens(&fallback_url);
-            if resolved.is_none() && (fallback_url.starts_with("http://") || fallback_url.starts_with("https://")) {
-                let enc = percent_encoding::utf8_percent_encode(&fallback_url, percent_encoding::NON_ALPHANUMERIC);
-                resolved = Some(format!("https://lens.google.com/uploadbyurl?hl=ru&url={}", enc));
-            }
-        }
-        let _ = tx.send(resolved);
+        let dl_b64 = download_image_bytes(&fb_copy)
+            .map(|bytes| base64_encode(&bytes))
+            .unwrap_or_default();
+        let _ = tx.send(dl_b64);
     });
 
-    glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+    glib::timeout_add_local(std::time::Duration::from_millis(45), move || {
         match rx.try_recv() {
-            Ok(Some(lens_result_url)) => {
+            Ok(dl_b64) => {
                 if let Some(s_rc) = state_weak.upgrade() {
-                    let side_wv = {
-                        if let Ok(mut st) = s_rc.try_borrow_mut() {
-                            st.last_lens_result_url = Some(lens_result_url.clone());
-                            st.side_webview.clone()
-                        } else {
-                            None
-                        }
-                    };
+                    let side_wv = s_rc.try_borrow().ok().and_then(|st| st.side_webview.clone());
                     if let Some(wv) = side_wv {
-                        wv.webview().load_uri(&lens_result_url);
+                        let html = render_lens_in_session_upload_html(&dl_b64, &fallback_url);
+                        wv.webview().load_html(&html, Some("https://lens.google.com/"));
                     }
                 }
                 glib::ControlFlow::Break
             }
-            Ok(None) => glib::ControlFlow::Break,
             Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
         }
@@ -2240,29 +2254,42 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         .unwrap_or("")
                         .to_string();
 
-                    let cap_info = state_rc.try_borrow().ok().and_then(|st| {
-                        let alloc = st.stack.allocation();
-                        st.window.window().map(|gw| (gw, alloc))
+                    let active_inner = state_rc.try_borrow().ok().and_then(|st| {
+                        st.active_tab_id
+                            .and_then(|id| st.tabs.iter().find(|t| t.id == id).map(|t| t.inner.clone()))
                     });
 
-                    if let Some((gdk_win, alloc)) = cap_info {
-                        let sx = (alloc.width() as f64) / vw;
-                        let sy = (alloc.height() as f64) / vh;
-                        let px = (alloc.x() + (rx * sx).round() as i32).max(0);
-                        let py = (alloc.y() + (ry * sy).round() as i32).max(0);
-                        let pw = ((rw * sx).round() as i32).max(12).min((alloc.width() - (px - alloc.x())).max(12));
-                        let ph = ((rh * sy).round() as i32).max(12).min((alloc.height() - (py - alloc.y())).max(12));
+                    if let Some(inner) = active_inner {
+                        let alloc = inner.allocation();
+                        let aw = alloc.width().max(1);
+                        let ah = alloc.height().max(1);
+                        let sx = (aw as f64) / vw;
+                        let sy = (ah as f64) / vh;
+                        let cx = ((rx * sx).round() as i32).clamp(0, (aw - 1).max(0));
+                        let cy = ((ry * sy).round() as i32).clamp(0, (ah - 1).max(0));
+                        let cw = ((rw * sx).round() as i32).max(12).min((aw - cx).max(1));
+                        let ch = ((rh * sy).round() as i32).max(12).min((ah - cy).max(1));
 
-                        let mut png_bytes_opt = None;
-                        let mut b64_png = String::new();
-                        if let Some(pixbuf) = gdk_win.pixbuf(px, py, pw, ph) {
-                            if let Ok(png_bytes) = pixbuf.save_to_bufferv("png", &[]) {
-                                b64_png = base64_encode(&png_bytes);
-                                png_bytes_opt = Some(png_bytes);
-                            }
-                        }
-
-                        spawn_lens_background_search(state_rc, png_bytes_opt, fallback, b64_png);
+                        let state_weak = Rc::downgrade(state_rc);
+                        // Wayland-native WebKit snapshot API (works 100% on Wayland/Niri & X11!)
+                        inner.snapshot(
+                            SnapshotRegion::Visible,
+                            SnapshotOptions::NONE,
+                            gtk::gio::Cancellable::NONE,
+                            move |res| {
+                                let mut b64_png = String::new();
+                                if let Ok(surface) = res {
+                                    if let Some(pixbuf) = gdk::pixbuf_get_from_surface(&surface, cx, cy, cw, ch) {
+                                        if let Ok(png_bytes) = pixbuf.save_to_bufferv("png", &[]) {
+                                            b64_png = base64_encode(&png_bytes);
+                                        }
+                                    }
+                                }
+                                if let Some(s_rc) = state_weak.upgrade() {
+                                    spawn_lens_background_search(&s_rc, b64_png, fallback);
+                                }
+                            },
+                        );
                     }
                 }
             }
@@ -2270,12 +2297,11 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
         "lens_image_data" => {
             let b64_data = msg.title.unwrap_or_default();
             let fallback = msg.url.unwrap_or_default();
-            let png_bytes_opt = base64_decode(&b64_data);
-            spawn_lens_background_search(state_rc, png_bytes_opt, fallback, b64_data);
+            spawn_lens_background_search(state_rc, b64_data, fallback);
         }
         "lens_url" => {
             if let Some(img_url) = msg.url {
-                spawn_lens_background_search(state_rc, None, img_url, String::new());
+                spawn_lens_background_search(state_rc, String::new(), img_url);
             }
         }
         "open_side_panel" => {
@@ -2675,52 +2701,58 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "take_screenshot" => {
-            let info = {
-                if let Ok(state) = state_rc.try_borrow() {
-                    let (w, h) = state.window.size();
-                    let top_h = if state.settings.show_bookmarks_bar { 102 } else { 74 };
-                    let dl_dir = state.settings.download_dir.clone();
-                    let active_wv = state.active_tab_id.and_then(|id| {
-                        state.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
-                    });
-                    state.window.window().map(|gw| (gw, w, h, top_h, dl_dir, active_wv))
-                } else {
-                    None
-                }
-            };
-            if let Some((gdk_win, w, h, top_h, dl_dir, active_wv)) = info {
-                let cap_h = (h - top_h).max(1);
-                if let Some(pixbuf) = gdk_win.pixbuf(0, top_h, w, cap_h) {
-                    let dir = if !dl_dir.trim().is_empty() {
-                        std::path::PathBuf::from(dl_dir)
-                    } else {
-                        dirs::picture_dir()
-                            .or_else(dirs::download_dir)
-                            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                    };
-                    let _ = std::fs::create_dir_all(&dir);
-                    let ts = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let path = dir.join(format!("ferro-screenshot-{}.png", ts));
-                    if pixbuf.savev(&path, "png", &[]).is_ok() {
-                        if let Some(wv) = active_wv {
-                            let path_str = path.to_string_lossy().replace('\\', "/").replace('\'', "\\'");
-                            let toast_js = format!(
-                                r#"(function(){{
-                                    const t = document.createElement('div');
-                                    t.textContent = 'Снимок экрана сохранён: {0}';
-                                    t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#1c1c20;color:#f2f2f5;border:1px solid #3c3c46;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);';
-                                    (document.body||document.documentElement).appendChild(t);
-                                    setTimeout(() => t.remove(), 3200);
-                                }})();"#,
-                                path_str
-                            );
-                            let _ = wv.evaluate_script(&toast_js);
+            let info = state_rc.try_borrow().ok().and_then(|state| {
+                let dl_dir = state.settings.download_dir.clone();
+                state.active_tab_id.and_then(|id| {
+                    state
+                        .tabs
+                        .iter()
+                        .find(|t| t.id == id)
+                        .map(|t| (t.inner.clone(), t.webview.clone(), dl_dir))
+                })
+            });
+            if let Some((inner, active_wv, dl_dir)) = info {
+                let alloc = inner.allocation();
+                let aw = alloc.width().max(1);
+                let ah = alloc.height().max(1);
+                inner.snapshot(
+                    SnapshotRegion::Visible,
+                    SnapshotOptions::NONE,
+                    gtk::gio::Cancellable::NONE,
+                    move |res| {
+                        if let Ok(surface) = res {
+                            if let Some(pixbuf) = gdk::pixbuf_get_from_surface(&surface, 0, 0, aw, ah) {
+                                let dir = if !dl_dir.trim().is_empty() {
+                                    std::path::PathBuf::from(&dl_dir)
+                                } else {
+                                    dirs::picture_dir()
+                                        .or_else(dirs::download_dir)
+                                        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                                };
+                                let _ = std::fs::create_dir_all(&dir);
+                                let ts = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                let path = dir.join(format!("ferro-screenshot-{}.png", ts));
+                                if pixbuf.savev(&path, "png", &[]).is_ok() {
+                                    let path_str = path.to_string_lossy().replace('\\', "/").replace('\'', "\\'");
+                                    let toast_js = format!(
+                                        r#"(function(){{
+                                            const t = document.createElement('div');
+                                            t.textContent = 'Снимок экрана сохранён: {0}';
+                                            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#1c1c20;color:#f2f2f5;border:1px solid #3c3c46;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);';
+                                            (document.body||document.documentElement).appendChild(t);
+                                            setTimeout(() => t.remove(), 3200);
+                                        }})();"#,
+                                        path_str
+                                    );
+                                    let _ = active_wv.evaluate_script(&toast_js);
+                                }
+                            }
                         }
-                    }
-                }
+                    },
+                );
             }
         }
         "tab_context_menu" => {
@@ -3032,12 +3064,40 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "window_max" => {
-            if let Ok(state) = state_rc.try_borrow() {
-                if state.window.is_maximized() {
-                    state.window.unmaximize();
+            let toggle_info = {
+                if let Ok(mut state) = state_rc.try_borrow_mut() {
+                    if state.win_fullscreen {
+                        state.win_fullscreen = false;
+                        state.window.unfullscreen();
+                        state.window.unmaximize();
+                        None
+                    } else if state.window.is_maximized() {
+                        state.window.unmaximize();
+                        None
+                    } else {
+                        let old_size = state.window.size();
+                        state.window.maximize();
+                        Some((state.window.clone(), old_size))
+                    }
                 } else {
-                    state.window.maximize();
+                    None
                 }
+            };
+            // On scrollable/tiling Wayland compositors (such as Niri) where `maximize()` may leave
+            // column gaps or be ignored depending on WM rules, check after 75ms and promote to
+            // edge-to-edge fullscreen if size didn't expand!
+            if let Some((win, old_size)) = toggle_info {
+                let state_weak = Rc::downgrade(state_rc);
+                glib::timeout_add_local_once(std::time::Duration::from_millis(75), move || {
+                    if !win.is_maximized() && win.size() == old_size {
+                        win.fullscreen();
+                        if let Some(s_rc) = state_weak.upgrade() {
+                            if let Ok(mut st) = s_rc.try_borrow_mut() {
+                                st.win_fullscreen = true;
+                            }
+                        }
+                    }
+                });
             }
         }
         "window_close" => {
@@ -3146,8 +3206,11 @@ fn main() {
         return;
     }
 
-    // Ensure GStreamer uses GL-compatible video decoders in GTK3 WebKitGTK on Wayland
-    // (avoids zero-copy VA-API DMABuf black <video> frames on hybrid Intel+NVIDIA setups)
+    // Ensure GStreamer uses GL-compatible video decoders & sink in GTK3 WebKitGTK on Wayland
+    // (fixes invisible/stalled <video> on dual Intel+NVIDIA DRM render nodes!)
+    if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
+        std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
+    }
     if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
         std::env::set_var(
             "GST_PLUGIN_FEATURE_RANK",
@@ -3259,6 +3322,7 @@ fn main() {
         last_lens_result_url: None,
         spare_tab: None,
         active_popover: None,
+        win_fullscreen: false,
         css_provider,
         top_webview: None,
         tabs: Vec::new(),
@@ -3318,7 +3382,7 @@ fn main() {
     let store_dir = AdBlocker::filter_store_dir();
     let store_dir_str = store_dir.to_string_lossy().to_string();
     let stamp_path = store_dir.join("rules.stamp");
-    const FILTER_STAMP: &str = "ferro-webkit-rules-v3";
+    const FILTER_STAMP: &str = "ferro-webkit-rules-v4";
     let stamp_ok = std::fs::read_to_string(&stamp_path)
         .map(|s| s.trim() == FILTER_STAMP)
         .unwrap_or(false);
@@ -3664,13 +3728,14 @@ fn main() {
             });
             return glib::Propagation::Stop;
         } else if key == gdk::keys::constants::F11 {
-            if let Ok(state) = state_for_keys.try_borrow() {
-                if state.window.is_maximized() {
-                    state.window.unmaximize();
-                } else {
-                    state.window.maximize();
-                }
-            }
+            handle_ipc(&state_for_keys, IpcMessage {
+                action: "window_max".to_string(),
+                url: None,
+                id: None,
+                title: None,
+                pass: None,
+                settings: None,
+            });
             return glib::Propagation::Stop;
         }
 
