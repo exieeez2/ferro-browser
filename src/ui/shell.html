@@ -45,19 +45,6 @@
       --text-muted: #6b7280;
     }
 
-    /* When a vivid Firefox-style topbar preset (carbon/aurora/sunset/neon/nebula) is active,
-       keep text crisp light and use translucent glass layers so the gradient flows seamlessly into the page */
-    .shell-container[data-preset="true"] {
-      --text-primary: #f4f4f6;
-      --text-secondary: rgba(244, 244, 246, 0.80);
-      --text-muted: rgba(244, 244, 246, 0.58);
-      --border-hairline: rgba(255, 255, 255, 0.08);
-      --bg-hover: rgba(255, 255, 255, 0.11);
-      --bg-active: rgba(255, 255, 255, 0.17);
-      --bg-input: rgba(8, 12, 18, 0.44);
-      border-bottom-color: rgba(255, 255, 255, 0.04);
-    }
-
     * {
       box-sizing: border-box;
       margin: 0;
@@ -101,10 +88,6 @@
       border-bottom: 1px solid var(--border-hairline);
       position: relative;
       min-width: 0;
-    }
-
-    .shell-container[data-preset="true"] .tab-strip {
-      background: transparent;
     }
 
     .tabs-scroll-area {
@@ -261,15 +244,6 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
     }
 
-    .shell-container[data-custom-accent="true"] .tab.active {
-      border-color: var(--accent);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24), inset 0 0 0 1px var(--accent-subtle);
-    }
-
-    .shell-container[data-preset="true"] .tab.active {
-      background: rgba(255, 255, 255, 0.12);
-    }
-
     .tab-favicon {
       width: 15px;
       height: 15px;
@@ -408,10 +382,6 @@
       background: var(--bg-toolbar);
       border-bottom: 1px solid var(--border-hairline);
       transition: background 0.2s ease;
-    }
-
-    .shell-container[data-preset="true"] .toolbar {
-      background: transparent;
     }
 
     .nav-group {
@@ -620,10 +590,6 @@
       transition: background 0.2s ease;
     }
 
-    .shell-container[data-preset="true"] .bookmarks-bar {
-      background: transparent;
-    }
-
     .bookmarks-items {
       display: flex;
       align-items: center;
@@ -805,7 +771,7 @@
   </style>
 </head>
 <body>
-  <div class="shell-container" id="shell" data-preset="false" data-rounded="true" data-custom-accent="false">
+  <div class="shell-container" id="shell" data-rounded="true">
     <!-- Top Tab Strip -->
     <div class="tab-strip" id="tabStrip">
       <div class="tabs-scroll-area" id="tabsScrollArea">
@@ -1766,13 +1732,10 @@
 
         root.setAttribute('data-theme', isLight ? 'light' : 'dark');
 
-        // Accent color
-        const acc = s.accent_color || (isLight ? '#18181b' : '#ececec');
-        const effectiveAcc = (isLight && acc.toLowerCase() === '#ececec') ? '#18181b' : acc;
+        // Strict monochrome accent
+        const effectiveAcc = isLight ? '#18181b' : '#ececec';
         root.style.setProperty('--accent', effectiveAcc);
-        root.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.22));
-        const isCustomAccent = acc.toLowerCase() !== '#ececec' && acc.toLowerCase() !== '#141414';
-        shellEl.setAttribute('data-custom-accent', isCustomAccent ? 'true' : 'false');
+        root.style.setProperty('--accent-subtle', isLight ? 'rgba(24, 24, 27, 0.12)' : 'rgba(255, 255, 255, 0.14)');
 
         // Corner rounding
         const rad = Number(s.corner_radius !== undefined ? s.corner_radius : 4);
@@ -1784,45 +1747,14 @@
         root.style.setProperty('--radius-omni', omniRad + 'px');
         shellEl.setAttribute('data-rounded', rad > 0 ? 'true' : 'false');
 
-        // Top panel themes in a single uniform solid tone (no gradients on tabs/topbar!)
+        // Solid uniform top panel matching theme strictly (zero tints/gradients)
         const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
-        const topThemes = {
-          carbon: `rgba(24, 26, 33, ${alpha})`,
-          obsidian: `rgba(24, 26, 33, ${alpha})`,
-          aurora: `rgba(11, 46, 49, ${alpha})`,
-          forest: `rgba(11, 46, 49, ${alpha})`,
-          sunset: `rgba(48, 22, 56, ${alpha})`,
-          neon: `rgba(22, 27, 64, ${alpha})`,
-          cyberpunk: `rgba(22, 27, 64, ${alpha})`,
-          nebula: `rgba(24, 18, 54, ${alpha})`
-        };
-
-        const rawTop = s.top_panel_theme || 'default';
-        const rawWp = s.wallpaper_type || 'none';
-        const effectivePreset = (rawTop !== 'default' && topThemes[rawTop])
-          ? rawTop
-          : (topThemes[rawWp] ? rawWp : 'default');
-
-        if (topThemes[effectivePreset]) {
-          shellEl.setAttribute('data-preset', 'true');
-          const solidTone = topThemes[effectivePreset];
-          root.style.setProperty('--bg-strip', solidTone);
-          root.style.setProperty('--bg-toolbar', solidTone);
-          shellEl.style.background = solidTone;
-        } else {
-          shellEl.setAttribute('data-preset', 'false');
-          if (isLight) {
-            const solidLight = `rgba(236, 238, 242, ${alpha})`;
-            root.style.setProperty('--bg-strip', solidLight);
-            root.style.setProperty('--bg-toolbar', solidLight);
-            shellEl.style.background = solidLight;
-          } else {
-            const solidDark = `rgba(20, 20, 22, ${alpha})`;
-            root.style.setProperty('--bg-strip', solidDark);
-            root.style.setProperty('--bg-toolbar', solidDark);
-            shellEl.style.background = solidDark;
-          }
-        }
+        const solidTone = isLight
+          ? `rgba(244, 244, 246, ${alpha})`
+          : `rgba(18, 18, 20, ${alpha})`;
+        root.style.setProperty('--bg-strip', solidTone);
+        root.style.setProperty('--bg-toolbar', solidTone);
+        shellEl.style.background = solidTone;
 
         // Bookmarks bar visibility
         const showBm = s.show_bookmarks_bar !== false;

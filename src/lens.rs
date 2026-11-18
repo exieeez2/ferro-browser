@@ -408,7 +408,7 @@ pub fn render_side_header_html() -> &'static str {
       --border: #2a2a30;
       --fg: #ececef;
       --muted: #90909a;
-      --accent: #3b82f6;
+      --accent: #ececec;
       --radius: 4px;
     }
     html[data-theme="light"] {
@@ -417,7 +417,7 @@ pub fn render_side_header_html() -> &'static str {
       --border: #d0d4dc;
       --fg: #18181b;
       --muted: #5f6368;
-      --accent: #2563eb;
+      --accent: #18181b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
     body {
@@ -558,12 +558,9 @@ pub fn render_side_header_html() -> &'static str {
 
     window.applySettings = function(s) {
       if (!s) return;
-      document.documentElement.setAttribute('data-theme', s.theme_mode === 'light' ? 'light' : 'dark');
-      if (s.accent_color && s.accent_color.toLowerCase() !== '#ececec') {
-        document.documentElement.style.setProperty('--accent', s.accent_color);
-      } else {
-        document.documentElement.style.setProperty('--accent', '#3b82f6');
-      }
+      const isLight = s.theme_mode === 'light';
+      document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+      document.documentElement.style.setProperty('--accent', isLight ? '#18181b' : '#ececec');
       if (s.corner_radius !== undefined) document.documentElement.style.setProperty('--radius', Math.min(10, s.corner_radius) + 'px');
     };
   </script>

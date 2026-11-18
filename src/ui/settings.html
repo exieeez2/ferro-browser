@@ -14,16 +14,16 @@
       --bg-input: #121215;
       --bg-hover: #27272e;
       --accent: #ececec;
-      --accent-fg: #111111;
-      --accent-subtle: rgba(236, 236, 236, 0.14);
-      --ui-active: #3b82f6;
-      --ui-active-fg: #ffffff;
-      --ui-active-subtle: rgba(59, 130, 246, 0.16);
+      --accent-fg: #111113;
+      --accent-subtle: rgba(236, 236, 236, 0.12);
+      --ui-active: #ececec;
+      --ui-active-fg: #111113;
+      --ui-active-subtle: rgba(255, 255, 255, 0.08);
       --text-primary: #ececef;
       --text-secondary: #9ca3af;
       --text-muted: #6b7280;
-      --border-hairline: #2a2a32;
-      --border-strong: #3d3d48;
+      --border-hairline: #27272a;
+      --border-strong: #3f3f46;
       --danger: #ef4444;
       --danger-subtle: rgba(239, 68, 68, 0.14);
       --radius-ctrl: 4px;
@@ -42,10 +42,10 @@
       --bg-hover: #e2e5eb;
       --accent: #18181b;
       --accent-fg: #ffffff;
-      --accent-subtle: rgba(24, 24, 27, 0.09);
-      --ui-active: #2563eb;
+      --accent-subtle: rgba(24, 24, 27, 0.08);
+      --ui-active: #18181b;
       --ui-active-fg: #ffffff;
-      --ui-active-subtle: rgba(37, 99, 235, 0.12);
+      --ui-active-subtle: rgba(0, 0, 0, 0.06);
       --text-primary: #18181b;
       --text-secondary: #52525b;
       --text-muted: #71717a;
@@ -174,8 +174,7 @@
 
     .nav-item.active {
       background: var(--ui-active-subtle);
-      border-color: var(--ui-active);
-      box-shadow: inset 3px 0 0 var(--ui-active);
+      border-color: var(--border-strong);
       color: var(--text-primary);
       font-weight: 600;
     }
@@ -479,8 +478,9 @@
     }
 
     .engine-card.active {
-      border: 1.5px solid var(--ui-active);
+      border: 1.5px solid var(--border-strong);
       background: var(--ui-active-subtle);
+      box-shadow: 0 0 0 1px var(--border-strong);
     }
 
     .engine-card-left {
@@ -491,55 +491,18 @@
       font-weight: 500;
     }
 
-    /* Color Swatches */
-    .color-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .color-swatch {
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-ctrl);
-      cursor: pointer;
-      border: 1px solid rgba(255,255,255,0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.1s ease;
-    }
-
-    .color-swatch:hover {
-      transform: scale(1.07);
-    }
-
-    .color-swatch.active {
-      outline: 2.5px solid var(--ui-active);
-      outline-offset: 2px;
-    }
-
-    .color-swatch.active::after {
-      content: '✓';
-      font-size: 13px;
-      font-weight: 800;
-      color: #ffffff;
-      text-shadow: 0 1px 3px rgba(0,0,0,0.85);
-    }
-
-    .color-picker-input {
-      -webkit-appearance: none;
+    /* SponsorBlock Tags */
+    .sb-tag {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
       border: 1px solid var(--border-hairline);
-      width: 28px;
-      height: 28px;
-      border-radius: var(--radius-ctrl);
-      cursor: pointer;
-      background: transparent;
-      padding: 0;
+      text-transform: lowercase;
     }
-    .color-picker-input::-webkit-color-swatch-wrapper { padding: 0; }
-    .color-picker-input::-webkit-color-swatch { border: none; border-radius: calc(var(--radius-ctrl) - 1px); }
 
     /* Sliders */
     .slider-wrap {
@@ -551,22 +514,22 @@
 
     .slider {
       flex: 1;
-      height: 5px;
+      height: 4px;
       -webkit-appearance: none;
-      background: linear-gradient(to right, var(--ui-active) 0%, var(--ui-active) var(--p, 0%), var(--border-strong) var(--p, 0%), var(--border-strong) 100%);
-      border-radius: 3px;
+      background: var(--border-strong);
+      border-radius: 2px;
       outline: none;
       cursor: pointer;
     }
 
     .slider::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 15px;
-      height: 15px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
       background: var(--ui-active);
-      border: 2px solid #ffffff;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+      border: 1px solid var(--border-strong);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.35);
       cursor: pointer;
     }
 
@@ -605,7 +568,7 @@
       }
     }
 
-    .preset-card:active, .engine-card:active, .btn:active, .seg-btn:active, .color-swatch:active {
+    .preset-card:active, .engine-card:active, .btn:active, .seg-btn:active {
       transform: scale(0.96);
     }
 
@@ -619,9 +582,9 @@
     }
 
     .preset-card.active {
-      border-color: var(--ui-active);
+      border-color: var(--text-primary);
       background: var(--ui-active-subtle);
-      box-shadow: 0 0 0 1px var(--ui-active);
+      box-shadow: 0 0 0 1px var(--text-primary);
     }
 
     .preset-card.active::after {
@@ -942,73 +905,20 @@
     <section class="section" id="sec-appearance">
       <div class="section-header">
         <h1 class="section-title">Внешний вид</h1>
-        <p class="section-desc">Цветовая схема, геометрия интерфейса, верхняя панель и фон новой вкладки.</p>
+        <p class="section-desc">Строгая цветовая схема, геометрия интерфейса и фон новой вкладки.</p>
       </div>
 
-      <div class="group-label">Цветовая схема и акценты</div>
+      <div class="group-label">Цветовая схема</div>
       <div class="panel">
         <div class="setting-row">
           <div class="row-info">
             <div class="row-title">Тема оформления</div>
-            <div class="row-sub">Переключение между строгой тёмной и светлой палитрой браузера.</div>
+            <div class="row-sub">Переключение между строгой тёмной и светлой монохромной палитрой браузера.</div>
           </div>
           <div class="row-ctrl">
             <div class="segmented">
               <button class="seg-btn active" id="btnThemeDark">Тёмная</button>
               <button class="seg-btn" id="btnThemeLight">Светлая</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="row-info">
-            <div class="row-title">Акцентный цвет</div>
-            <div class="row-sub">Цвет фокуса адресной строки, активных переключателей и индикаторов загрузки.</div>
-          </div>
-          <div class="row-ctrl">
-            <div class="color-grid">
-              <div class="color-swatch active" data-color="#ececec" style="background:#ececec;" title="Монохром"></div>
-              <div class="color-swatch" data-color="#3b82f6" style="background:#3b82f6;" title="Синий"></div>
-              <div class="color-swatch" data-color="#10b981" style="background:#10b981;" title="Изумрудный"></div>
-              <div class="color-swatch" data-color="#8b5cf6" style="background:#8b5cf6;" title="Фиолетовый"></div>
-              <div class="color-swatch" data-color="#f59e0b" style="background:#f59e0b;" title="Янтарный"></div>
-              <div class="color-swatch" data-color="#ef4444" style="background:#ef4444;" title="Красный"></div>
-              <div class="color-swatch" data-color="#06b6d4" style="background:#06b6d4;" title="Бирюзовый"></div>
-              <input type="color" class="color-picker-input" id="customColorPicker" value="#ececec" title="Произвольный цвет" />
-              <input type="text" class="text-input mono-input" id="customColorHex" style="width:86px;" value="#ececec" maxlength="7" spellcheck="false" />
-            </div>
-          </div>
-        </div>
-
-        <div class="setting-row block-row">
-          <div class="row-info">
-            <div class="row-title">Стиль верхней панели</div>
-            <div class="row-sub">Фоновое покрытие шапки вкладок, навигации и панели закладок.</div>
-          </div>
-          <div class="preset-grid">
-            <div class="preset-card active" data-topbar="default">
-              <div class="preset-thumb" style="background:#141416;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Монохром</div>
-            </div>
-            <div class="preset-card" data-topbar="carbon">
-              <div class="preset-thumb" style="background:#181a21;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Обсидиан</div>
-            </div>
-            <div class="preset-card" data-topbar="aurora">
-              <div class="preset-thumb" style="background:#0b2e31;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Северное сияние</div>
-            </div>
-            <div class="preset-card" data-topbar="sunset">
-              <div class="preset-thumb" style="background:#301638;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Закат</div>
-            </div>
-            <div class="preset-card" data-topbar="neon">
-              <div class="preset-thumb" style="background:#161b40;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Кибернеон</div>
-            </div>
-            <div class="preset-card" data-topbar="nebula">
-              <div class="preset-thumb" style="background:#181236;"><div class="mock-tab"></div></div>
-              <div class="preset-label">Космос</div>
             </div>
           </div>
         </div>
@@ -1054,32 +964,16 @@
         <div class="setting-row block-row">
           <div class="row-info">
             <div class="row-title">Фоновое изображение</div>
-            <div class="row-sub">Выберите встроенный фон, укажите прямую ссылку или загрузите локальный файл.</div>
+            <div class="row-sub">Монохромное оформление по умолчанию, прямое URL-изображение или локальный файл.</div>
           </div>
           <div class="preset-grid">
             <div class="preset-card wp-card active" data-wp="none">
-              <div class="preset-thumb" style="background:#141414; align-items:center; justify-content:center; color:var(--text-muted); font-family:var(--font-mono); font-size:11px;">ВЫКЛ</div>
+              <div class="preset-thumb" style="background:#141416; align-items:center; justify-content:center; color:var(--text-muted); font-family:var(--font-mono); font-size:11px;">ВЫКЛ</div>
               <div class="preset-label">Без фона</div>
             </div>
             <div class="preset-card wp-card" data-wp="obsidian" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #323442 0%, #1e2029 50%, #121318 100%);"></div>
+              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #26272e 0%, #17181c 50%, #101012 100%);"></div>
               <div class="preset-label">Обсидиан</div>
-            </div>
-            <div class="preset-card wp-card" data-wp="forest" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 35% 0%, #115e59 0%, #0b3b3c 48%, #071c21 100%);"></div>
-              <div class="preset-label">Северный лес</div>
-            </div>
-            <div class="preset-card wp-card" data-wp="sunset" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #9a3412 0%, #581c87 48%, #1f1235 100%);"></div>
-              <div class="preset-label">Закат</div>
-            </div>
-            <div class="preset-card wp-card" data-wp="cyberpunk" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 50% 0%, #5b21b6 0%, #1e295b 50%, #0b1329 100%);"></div>
-              <div class="preset-label">Кибернеон</div>
-            </div>
-            <div class="preset-card wp-card" data-wp="nebula" data-url="">
-              <div class="preset-thumb" style="background:radial-gradient(ellipse 95% 110% at 65% 0%, #4c1d95 0%, #1e1b4b 50%, #0b0a1a 100%);"></div>
-              <div class="preset-label">Космос</div>
             </div>
           </div>
 
@@ -1164,7 +1058,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#00d400;display:inline-block;"></span>Спонсорские интеграции (Sponsor)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">sponsor</span>Спонсорские интеграции</div>
             <div class="row-sub">Оплаченная реклама товаров, сервисов и партнёров внутри видеоролика.</div>
           </div>
           <div class="row-ctrl">
@@ -1174,7 +1068,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#ffff00;display:inline-block;"></span>Самореклама и мерч (Selfpromo)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">selfpromo</span>Самореклама и мерч</div>
             <div class="row-sub">Реклама собственного мерча, платных подписок, бусти, патреона и соцсетей автора.</div>
           </div>
           <div class="row-ctrl">
@@ -1184,7 +1078,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#cc00ff;display:inline-block;"></span>Напоминания о лайке и подписке (Interaction)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">interaction</span>Напоминания о лайке и подписке</div>
             <div class="row-sub">Призывы подписаться на канал, поставить лайк или нажать на колокольчик.</div>
           </div>
           <div class="row-ctrl">
@@ -1194,7 +1088,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#00ffff;display:inline-block;"></span>Вступление / Заставка (Intro)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">intro</span>Вступление и заставка</div>
             <div class="row-sub">Анимированные заставки и вступительные титры без полезного содержания.</div>
           </div>
           <div class="row-ctrl">
@@ -1204,7 +1098,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#0202ed;display:inline-block;"></span>Конечные заставки и титры (Outro)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">outro</span>Конечные заставки и титры</div>
             <div class="row-sub">Финальные титры и экраны с карточками других видео в конце ролика.</div>
           </div>
           <div class="row-ctrl">
@@ -1214,7 +1108,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#008fd6;display:inline-block;"></span>Превью / Краткий обзор (Preview)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">preview</span>Превью и краткий обзор</div>
             <div class="row-sub">Нарезка моментов («сегодня в выпуске») или пересказ предыдущих серий.</div>
           </div>
           <div class="row-ctrl">
@@ -1224,7 +1118,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#ff9900;display:inline-block;"></span>Немузыкальная часть в клипах (Music Offtopic)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">music</span>Немузыкальная часть в клипах</div>
             <div class="row-sub">Актерские сценки и диалоги в начале или конце музыкальных видеоклипов.</div>
           </div>
           <div class="row-ctrl">
@@ -1234,7 +1128,7 @@
 
         <div class="setting-row">
           <div class="row-info">
-            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span style="width:10px;height:10px;border-radius:50%;background:#7300ff;display:inline-block;"></span>Отступления / Вода (Filler)</div>
+            <div class="row-title" style="display:flex;align-items:center;gap:8px;"><span class="sb-tag">filler</span>Отступления и вода</div>
             <div class="row-sub">Необязательные шутки, паузы и отступления от основной темы видео.</div>
           </div>
           <div class="row-ctrl">
@@ -1566,19 +1460,24 @@
 
     function applyStateToUi() {
       const isLight = settings.theme_mode === 'light';
-      const rawAcc = (settings.accent_color || '#ececec').trim();
-      const isMonoAcc = ['#ececec', '#ffffff', '#141414', '#18181b', '#111111'].includes(rawAcc.toLowerCase());
-      const effectiveAcc = (isLight && rawAcc.toLowerCase() === '#ececec') ? '#18181b' : rawAcc;
-      const uiActive = isMonoAcc ? (isLight ? '#2563eb' : '#3b82f6') : rawAcc;
-      const uiActiveFg = isLightHex(uiActive) ? '#111111' : '#ffffff';
+      // Strict unified monochrome styling
+      settings.accent_color = isLight ? '#18181b' : '#ececec';
+      settings.top_panel_theme = 'default';
+      if (['forest', 'aurora', 'sunset', 'cyberpunk', 'neon', 'nebula'].includes(settings.wallpaper_type)) {
+        settings.wallpaper_type = 'none';
+      }
+
+      const effectiveAcc = isLight ? '#18181b' : '#ececec';
+      const uiActive = isLight ? '#18181b' : '#ececec';
+      const uiActiveFg = isLight ? '#ffffff' : '#111113';
 
       document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
       document.documentElement.style.setProperty('--accent', effectiveAcc);
-      document.documentElement.style.setProperty('--accent-fg', isLightHex(effectiveAcc) ? '#111111' : '#ffffff');
-      document.documentElement.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.14));
+      document.documentElement.style.setProperty('--accent-fg', uiActiveFg);
+      document.documentElement.style.setProperty('--accent-subtle', isLight ? 'rgba(24, 24, 27, 0.08)' : 'rgba(255, 255, 255, 0.08)');
       document.documentElement.style.setProperty('--ui-active', uiActive);
       document.documentElement.style.setProperty('--ui-active-fg', uiActiveFg);
-      document.documentElement.style.setProperty('--ui-active-subtle', hexToRgba(uiActive, 0.16));
+      document.documentElement.style.setProperty('--ui-active-subtle', isLight ? 'rgba(0, 0, 0, 0.06)' : 'rgba(255, 255, 255, 0.08)');
       document.documentElement.style.setProperty('--radius-ctrl', settings.corner_radius + 'px');
       document.documentElement.style.setProperty('--radius-card', (settings.corner_radius === 0 ? 0 : Math.max(4, Math.round(settings.corner_radius * 1.2))) + 'px');
 
@@ -1598,18 +1497,6 @@
       // Appearance
       document.getElementById('btnThemeDark').classList.toggle('active', !isLight);
       document.getElementById('btnThemeLight').classList.toggle('active', isLight);
-
-      document.querySelectorAll('.color-swatch').forEach(sw => {
-        sw.classList.toggle('active', sw.dataset.color.toLowerCase() === settings.accent_color.toLowerCase());
-      });
-      document.getElementById('customColorPicker').value = settings.accent_color.startsWith('#') ? settings.accent_color : '#ececec';
-      if (document.activeElement !== document.getElementById('customColorHex')) {
-        document.getElementById('customColorHex').value = settings.accent_color;
-      }
-
-      document.querySelectorAll('[data-topbar]').forEach(c => {
-        c.classList.toggle('active', c.dataset.topbar === (settings.top_panel_theme || 'default'));
-      });
 
       document.getElementById('radiusSlider').value = settings.corner_radius;
       document.getElementById('radiusVal').textContent = settings.corner_radius + 'px';
@@ -1759,61 +1646,6 @@
       saveSettings();
     });
 
-    document.querySelectorAll('.color-swatch').forEach(sw => {
-      sw.addEventListener('click', () => {
-        settings.accent_color = sw.dataset.color;
-        applyStateToUi();
-        saveSettings();
-      });
-    });
-
-    document.getElementById('customColorPicker').addEventListener('input', (e) => {
-      settings.accent_color = e.target.value;
-      applyStateToUi();
-      saveSettings(true);
-    });
-
-    document.getElementById('customColorHex').addEventListener('change', (e) => {
-      let val = e.target.value.trim();
-      if (!val.startsWith('#')) val = '#' + val;
-      if (/^#[0-9A-Fa-f]{6}$/.test(val)) {
-        settings.accent_color = val;
-        applyStateToUi();
-        saveSettings();
-      }
-    });
-
-    const TOPBAR_TO_WP = {
-      default: 'none',
-      carbon: 'obsidian',
-      aurora: 'forest',
-      sunset: 'sunset',
-      neon: 'cyberpunk',
-      nebula: 'nebula'
-    };
-
-    const WP_TO_TOPBAR = {
-      none: 'default',
-      obsidian: 'carbon',
-      forest: 'aurora',
-      sunset: 'sunset',
-      cyberpunk: 'neon',
-      nebula: 'nebula'
-    };
-
-    document.querySelectorAll('[data-topbar]').forEach(c => {
-      c.addEventListener('click', () => {
-        const tb = c.dataset.topbar;
-        settings.top_panel_theme = tb;
-        if (settings.wallpaper_type !== 'custom' && TOPBAR_TO_WP[tb]) {
-          settings.wallpaper_type = TOPBAR_TO_WP[tb];
-          settings.wallpaper_url = '';
-        }
-        applyStateToUi();
-        saveSettings();
-      });
-    });
-
     document.getElementById('radiusSlider').addEventListener('input', (e) => {
       settings.corner_radius = parseInt(e.target.value);
       applyStateToUi();
@@ -1839,9 +1671,7 @@
         const wp = c.dataset.wp;
         settings.wallpaper_type = wp;
         settings.wallpaper_url = c.dataset.url || '';
-        if (WP_TO_TOPBAR[wp]) {
-          settings.top_panel_theme = WP_TO_TOPBAR[wp];
-        }
+        settings.top_panel_theme = 'default';
         applyStateToUi();
         saveSettings();
       });

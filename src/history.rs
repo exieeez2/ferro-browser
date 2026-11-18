@@ -573,11 +573,10 @@ impl HistoryData {
 
     window.applySettings = function(s) {{
       if (!s) return;
+      const isLight = s.theme_mode === 'light';
       if (s.theme_mode) document.documentElement.setAttribute('data-theme', s.theme_mode);
-      if (s.accent_color) {{
-        document.documentElement.style.setProperty('--accent', s.accent_color);
-        document.documentElement.style.setProperty('--border-strong', s.accent_color);
-      }}
+      const eff = isLight ? '#18181b' : '#ececec';
+      document.documentElement.style.setProperty('--accent', eff);
       if (s.corner_radius !== undefined) {{
         document.documentElement.style.setProperty('--radius-ctrl', s.corner_radius + 'px');
       }}

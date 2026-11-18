@@ -141,7 +141,30 @@ impl BrowserSettings {
         let path = Self::file_path();
         if path.exists() {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(settings) = serde_json::from_str(&content) {
+                if let Ok(mut settings) = serde_json::from_str::<BrowserSettings>(&content) {
+                    let mut changed = false;
+                    if settings.accent_color != "#ececec" && settings.accent_color != "#18181b" {
+                        settings.accent_color = if settings.theme_mode == "light" {
+                            "#18181b".to_string()
+                        } else {
+                            "#ececec".to_string()
+                        };
+                        changed = true;
+                    }
+                    if settings.top_panel_theme != "default" {
+                        settings.top_panel_theme = "default".to_string();
+                        changed = true;
+                    }
+                    if matches!(
+                        settings.wallpaper_type.as_str(),
+                        "forest" | "aurora" | "sunset" | "cyberpunk" | "neon" | "nebula"
+                    ) {
+                        settings.wallpaper_type = "none".to_string();
+                        changed = true;
+                    }
+                    if changed {
+                        let _ = settings.save();
+                    }
                     return settings;
                 }
             }
@@ -164,23 +187,23 @@ impl BrowserSettings {
     pub fn generate_css_variables(&self) -> String {
         let (bg_strip, bg_toolbar, bg_surface, bg_elevated, text_pri, text_sec, border) = if self.theme_mode == "light" {
             (
-                "rgba(232, 232, 232, VAR_OP)",
-                "rgba(240, 240, 240, VAR_OP)",
-                "rgba(244, 244, 245, VAR_OP)",
+                "rgba(244, 244, 246, VAR_OP)",
+                "rgba(244, 244, 246, VAR_OP)",
                 "rgba(255, 255, 255, VAR_OP)",
-                "#141414",
+                "rgba(241, 242, 245, VAR_OP)",
+                "#18181b",
                 "#52525b",
-                "#dcdcdc",
+                "#e4e4e7",
             )
         } else {
             (
-                "rgba(17, 17, 17, VAR_OP)",
-                "rgba(20, 20, 20, VAR_OP)",
-                "rgba(24, 24, 27, VAR_OP)",
-                "rgba(28, 28, 30, VAR_OP)",
-                "#ececec",
+                "rgba(18, 18, 20, VAR_OP)",
+                "rgba(18, 18, 20, VAR_OP)",
+                "rgba(20, 20, 22, VAR_OP)",
+                "rgba(27, 27, 31, VAR_OP)",
+                "#ececef",
                 "#a1a1aa",
-                "#2a2a2a",
+                "#27272a",
             )
         };
 
@@ -190,13 +213,7 @@ impl BrowserSettings {
         let bg_surface = bg_surface.replace("VAR_OP", &op_val);
         let bg_elevated = bg_elevated.replace("VAR_OP", &op_val);
 
-        let top_bg = match self.top_panel_theme.as_str() {
-            "carbon" => "linear-gradient(90deg, #18181b, #27272a)",
-            "aurora" => "linear-gradient(135deg, #09203f, #1e3a8a, #065f46)",
-            "sunset" => "linear-gradient(135deg, #2a0845, #6441a5, #f59e0b)",
-            "neon" => "linear-gradient(135deg, #050505, #1f0b24, #0a192f)",
-            _ => &bg_toolbar,
-        };
+        let eff_accent = if self.theme_mode == "light" { "#18181b" } else { "#ececec" };
 
         let blur_val = if self.ui_transparency > 0 {
             format!("blur({}px) saturate(180%)", 12 + self.ui_transparency / 3)
@@ -225,7 +242,7 @@ impl BrowserSettings {
                 --ui-backdrop-filter: {blur_val};
             }}
             "#,
-            accent = self.accent_color,
+            accent = eff_accent,
             rad_tab = self.corner_radius,
             rad_ctrl = self.corner_radius.max(2),
             rad_card = (self.corner_radius * 2).max(4),
@@ -237,7 +254,7 @@ impl BrowserSettings {
             text_pri = text_pri,
             text_sec = text_sec,
             border = border,
-            top_bg = top_bg,
+            top_bg = bg_toolbar,
             blur_val = blur_val,
         )
     }

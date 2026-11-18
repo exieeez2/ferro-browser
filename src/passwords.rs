@@ -249,9 +249,8 @@ impl PasswordsData {
                 const muted = isLight ? '#71717a' : '#9ca3af';
                 const inpBg = isLight ? '#f4f4f6' : '#111113';
                 const border = isLight ? '#d4d4d8' : '#34343e';
-                const accent = cfg.accent_color || (isLight ? '#18181b' : '#ececec');
-                const effAccent = (isLight && accent.toLowerCase() === '#ececec') ? '#18181b' : accent;
-                const accFg = effAccent.toLowerCase() === '#ececec' ? '#111111' : '#ffffff';
+                const effAccent = isLight ? '#18181b' : '#ececec';
+                const accFg = isLight ? '#ffffff' : '#111113';
 
                 const host = document.createElement('div');
                 host.id = HOST_ID;
@@ -1179,11 +1178,9 @@ impl PasswordsData {
       if (!s) return;
       const isLight = s.theme_mode === 'light';
       document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
-      if (s.accent_color) {{
-        const eff = (isLight && s.accent_color.toLowerCase() === '#ececec') ? '#18181b' : s.accent_color;
-        document.documentElement.style.setProperty('--accent', eff);
-        document.documentElement.style.setProperty('--accent-fg', eff.toLowerCase() === '#ececec' ? '#111111' : '#ffffff');
-      }}
+      const eff = isLight ? '#18181b' : '#ececec';
+      document.documentElement.style.setProperty('--accent', eff);
+      document.documentElement.style.setProperty('--accent-fg', isLight ? '#ffffff' : '#111113');
       if (s.corner_radius !== undefined) {{
         document.documentElement.style.setProperty('--radius-ctrl', s.corner_radius + 'px');
       }}

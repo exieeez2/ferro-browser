@@ -1022,25 +1022,13 @@
     function getWallpaperGradients(alpha) {
       return {
         obsidian: `linear-gradient(180deg, rgba(24, 26, 33, ${alpha}) 0%, rgba(30, 33, 44, ${alpha}) 45%, rgba(16, 17, 22, ${alpha}) 100%)`,
-        carbon: `linear-gradient(180deg, rgba(24, 26, 33, ${alpha}) 0%, rgba(30, 33, 44, ${alpha}) 45%, rgba(16, 17, 22, ${alpha}) 100%)`,
-        forest: `linear-gradient(180deg, rgba(11, 46, 49, ${alpha}) 0%, rgba(14, 66, 68, ${alpha}) 45%, rgba(7, 26, 30, ${alpha}) 100%)`,
-        aurora: `linear-gradient(180deg, rgba(11, 46, 49, ${alpha}) 0%, rgba(14, 66, 68, ${alpha}) 45%, rgba(7, 26, 30, ${alpha}) 100%)`,
-        sunset: `linear-gradient(180deg, rgba(48, 22, 56, ${alpha}) 0%, rgba(92, 30, 74, ${alpha}) 48%, rgba(26, 14, 42, ${alpha}) 100%)`,
-        cyberpunk: `linear-gradient(180deg, rgba(22, 27, 64, ${alpha}) 0%, rgba(44, 32, 108, ${alpha}) 48%, rgba(11, 16, 36, ${alpha}) 100%)`,
-        neon: `linear-gradient(180deg, rgba(22, 27, 64, ${alpha}) 0%, rgba(44, 32, 108, ${alpha}) 48%, rgba(11, 16, 36, ${alpha}) 100%)`,
-        nebula: `linear-gradient(180deg, rgba(24, 18, 54, ${alpha}) 0%, rgba(46, 26, 98, ${alpha}) 48%, rgba(11, 10, 26, ${alpha}) 100%)`
+        carbon: `linear-gradient(180deg, rgba(24, 26, 33, ${alpha}) 0%, rgba(30, 33, 44, ${alpha}) 45%, rgba(16, 17, 22, ${alpha}) 100%)`
       };
     }
 
     const THEME_CARD_TINTS = {
       obsidian: { elevated: 'rgba(24, 26, 34, 0.62)', hover: 'rgba(38, 40, 52, 0.72)' },
-      carbon: { elevated: 'rgba(24, 26, 34, 0.62)', hover: 'rgba(38, 40, 52, 0.72)' },
-      forest: { elevated: 'rgba(9, 34, 38, 0.56)', hover: 'rgba(15, 52, 56, 0.68)' },
-      aurora: { elevated: 'rgba(9, 34, 38, 0.56)', hover: 'rgba(15, 52, 56, 0.68)' },
-      sunset: { elevated: 'rgba(36, 16, 56, 0.56)', hover: 'rgba(58, 24, 84, 0.68)' },
-      cyberpunk: { elevated: 'rgba(16, 22, 48, 0.56)', hover: 'rgba(28, 36, 74, 0.68)' },
-      neon: { elevated: 'rgba(16, 22, 48, 0.56)', hover: 'rgba(28, 36, 74, 0.68)' },
-      nebula: { elevated: 'rgba(18, 15, 44, 0.58)', hover: 'rgba(30, 25, 68, 0.70)' }
+      carbon: { elevated: 'rgba(24, 26, 34, 0.62)', hover: 'rgba(38, 40, 52, 0.72)' }
     };
 
     const wallpaperEl = document.getElementById('wallpaperBg');
@@ -1078,11 +1066,10 @@
         saveVal('ferro_ntp_show_sc', state.showShortcuts);
       }
 
-      if (s.accent_color) {
-        const effectiveAcc = (isLight && s.accent_color.toLowerCase() === '#ececec') ? '#18181b' : s.accent_color;
-        root.style.setProperty('--accent', effectiveAcc);
-        root.style.setProperty('--accent-subtle', hexToRgba(effectiveAcc, 0.22));
-      }
+      // Strict monochrome accent
+      const effectiveAcc = isLight ? '#18181b' : '#ececec';
+      root.style.setProperty('--accent', effectiveAcc);
+      root.style.setProperty('--accent-subtle', isLight ? 'rgba(24, 24, 27, 0.12)' : 'rgba(255, 255, 255, 0.15)');
 
       if (s.corner_radius !== undefined) {
         const rad = Number(s.corner_radius);
