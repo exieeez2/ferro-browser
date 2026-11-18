@@ -682,6 +682,8 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
             state.top_box.set_size_request(-1, top_h);
 
             let surface_rgba = compute_surface_rgba(&state.settings);
+            let mut tab_rgba = surface_rgba;
+            tab_rgba.set_alpha(1.0);
             let clamped_zoom = state.settings.default_zoom.clamp(50, 200);
             let zoom_factor = (clamped_zoom as f64) / 100.0;
             let smooth_scrolling = state.settings.smooth_scrolling;
@@ -692,7 +694,7 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
             state.adblocker.set_enabled(adblock_enabled);
 
             for t in &mut state.tabs {
-                t.inner.set_background_color(&surface_rgba);
+                t.inner.set_background_color(&tab_rgba);
                 t.inner.set_zoom_level(zoom_factor);
                 t.zoom_pct = clamped_zoom;
                 if let Some(wk_s) = WebViewExt::settings(&t.inner) {
@@ -718,7 +720,7 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
 
             let mut all_wvs: Vec<Rc<WebView>> = state.tabs.iter().map(|t| t.webview.clone()).collect();
             if let Some(sp) = &state.spare_tab {
-                sp.inner.set_background_color(&surface_rgba);
+                sp.inner.set_background_color(&tab_rgba);
                 all_wvs.push(sp.webview.clone());
             }
             if let Some(sh) = &state.side_header_webview {
@@ -1534,7 +1536,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     let builder = builder
         .with_initialization_script(&init_script)
         .with_autoplay(true)
-        .with_transparent(true)
+        .with_transparent(false)
         .with_ipc_handler(move |req| {
             match serde_json::from_str::<IpcMessage>(req.body()) {
                 Ok(msg) => {
@@ -1558,9 +1560,11 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
 
     let inner_wv = webview.webview();
 
-    // Immediately set theme surface background color on the WebKitGTK widget BEFORE loading URI
-    // so there is NEVER a transparent see-through desktop flash when opening a new tab!
-    inner_wv.set_background_color(&compute_surface_rgba(&settings_snapshot));
+    // Immediately set opaque theme surface background color on the WebKitGTK widget BEFORE loading URI
+    // so WebKitGTK uses an opaque backing surface (zero per-frame alpha-blending overhead during 60fps video!)
+    let mut tab_bg = compute_surface_rgba(&settings_snapshot);
+    tab_bg.set_alpha(1.0);
+    inner_wv.set_background_color(&tab_bg);
     inner_wv.set_zoom_level((settings_snapshot.default_zoom.clamp(50, 200) as f64) / 100.0);
 
     // Attach global WebKit download handler & WebBrowser cache model once on the shared WebContext
@@ -1880,11 +1884,19 @@ fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &s
         r##"
         window._ferro_is_pip_window = true;
         try {{
+            const blockedRe = /av01|vp0?9|vp8|webm|theora/i;
             if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {{
                 const origSup = window.MediaSource.isTypeSupported.bind(window.MediaSource);
                 window.MediaSource.isTypeSupported = function(m) {{
-                    if (typeof m === 'string' && /av01/i.test(m)) return false;
+                    if (typeof m === 'string' && blockedRe.test(m)) return false;
                     return origSup(m);
+                }};
+            }}
+            if (window.HTMLMediaElement && window.HTMLMediaElement.prototype.canPlayType) {{
+                const origCan = window.HTMLMediaElement.prototype.canPlayType;
+                window.HTMLMediaElement.prototype.canPlayType = function(m) {{
+                    if (typeof m === 'string' && blockedRe.test(m)) return '';
+                    return origCan.call(this, m);
                 }};
             }}
         }} catch(e) {{}}
@@ -1906,7 +1918,7 @@ fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &s
                             margin: 0 !important;
                             padding: 0 !important;
                         }}
-                        #masthead-container, ytd-masthead, #secondary, #below, #comments, #chat, ytd-merch-shelf-renderer {{
+                        #masthead-container, ytd-masthead, #secondary, #below, #comments, #chat, ytd-merch-shelf-renderer, #cinematics, #cinematics-container {{
                             display: none !important;
                         }}
                         #movie_player, .html5-video-player {{
@@ -4077,8 +4089,8 @@ fn spawn_browser_window(
 
     let hpaned = gtk::Paned::new(gtk::Orientation::Horizontal);
     let stack = gtk::Stack::new();
-    stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-    stack.set_transition_duration(140);
+    stack.set_transition_type(gtk::StackTransitionType::None);
+    stack.set_transition_duration(0);
     let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     hpaned.pack1(&stack, true, false);
     hpaned.pack2(&side_box, false, false);
@@ -4132,20 +4144,27 @@ fn spawn_browser_window(
 
     ALL_WINDOWS.with(|wins| wins.borrow_mut().push(state.clone()));
 
-    // Explicitly clear RGBA window backing surface every frame so GTK3 never tiles/smears top_box scanlines!
+    // Explicitly clear top_box RGBA window backing strip only when top region is in clip_extents,
+    // avoiding full-window Cairo CPU fills during 60fps video playback in the tab stack below!
     let first_frame_drawn = Rc::new(Cell::new(false));
     let drawn_flag_cb = first_frame_drawn.clone();
     let state_for_draw = state.clone();
-    window.connect_draw(move |_win, cr| {
-        let rgba = state_for_draw
-            .try_borrow()
-            .map(|st| compute_surface_rgba(&st.settings))
-            .unwrap_or_else(|_| gdk::RGBA::new(0.08, 0.08, 0.08, 1.0));
-        cr.set_operator(gtk::cairo::Operator::Source);
-        cr.set_source_rgba(rgba.red(), rgba.green(), rgba.blue(), rgba.alpha());
-        let _ = cr.paint();
-        cr.set_operator(gtk::cairo::Operator::Over);
+    window.connect_draw(move |win, cr| {
         drawn_flag_cb.set(true);
+        let top_only = cr.clip_extents().map(|(_, y1, _, _)| y1 < 108.0).unwrap_or(true);
+        if top_only {
+            let rgba = state_for_draw
+                .try_borrow()
+                .map(|st| compute_surface_rgba(&st.settings))
+                .unwrap_or_else(|_| gdk::RGBA::new(0.08, 0.08, 0.08, 1.0));
+            let w = win.allocated_width().max(1) as f64;
+            let _ = cr.save();
+            cr.rectangle(0.0, 0.0, w, 108.0);
+            cr.set_operator(gtk::cairo::Operator::Source);
+            cr.set_source_rgba(rgba.red(), rgba.green(), rgba.blue(), rgba.alpha());
+            let _ = cr.fill();
+            let _ = cr.restore();
+        }
         glib::Propagation::Proceed
     });
 
@@ -4614,15 +4633,15 @@ fn main() {
         return;
     }
 
-    // Ensure GStreamer uses GL-compatible video decoders & sink in GTK3 WebKitGTK on Wayland
-    // (fixes invisible/stalled <video> on dual Intel+NVIDIA DRM render nodes!)
+    // Ensure GStreamer uses hardware Intel VA-API H.264 (`vah264dec`) + GL sink in GTK3 WebKitGTK
+    // while disabling broken `vavp9dec` and slow single-threaded `vp9dec` / `av1dec` software decoders!
     if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
         std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
     }
     if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
         std::env::set_var(
             "GST_PLUGIN_FEATURE_RANK",
-            "av1dec:NONE,vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
+            "av1dec:NONE,vaav1dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vp9dec:NONE,vah264dec:MAX,avdec_h264:HIGH,avdec_vp9:HIGH",
         );
     }
 
