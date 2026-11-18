@@ -1884,7 +1884,7 @@ fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &s
         r##"
         window._ferro_is_pip_window = true;
         try {{
-            const blockedRe = /av01|vp0?9|vp8|webm|theora/i;
+            const blockedRe = /av01/i;
             if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {{
                 const origSup = window.MediaSource.isTypeSupported.bind(window.MediaSource);
                 window.MediaSource.isTypeSupported = function(m) {{
@@ -4633,15 +4633,15 @@ fn main() {
         return;
     }
 
-    // Ensure GStreamer uses hardware Intel VA-API H.264 (`vah264dec`) + GL sink in GTK3 WebKitGTK
-    // while disabling broken `vavp9dec` and slow single-threaded `vp9dec` / `av1dec` software decoders!
+    // Ensure GStreamer uses hardware Intel VA-API VP9 (`vavp9dec:MAX`) & H.264 (`vah264dec:MAX`) + GL sink
+    // for 1080p60 / 1440p60 / 4K60 playback while disabling slow single-threaded `vp9dec` / `av1dec`!
     if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
         std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
     }
     if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
         std::env::set_var(
             "GST_PLUGIN_FEATURE_RANK",
-            "av1dec:NONE,vaav1dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vp9dec:NONE,vah264dec:MAX,avdec_h264:HIGH,avdec_vp9:HIGH",
+            "av1dec:NONE,vaav1dec:NONE,vp9dec:NONE,vavp9dec:MAX,vah264dec:MAX,vavp8dec:MAX,avdec_vp9:HIGH,avdec_h264:HIGH",
         );
     }
 

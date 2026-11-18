@@ -165,9 +165,10 @@ pub const ADBLOCK_JS: &str = r#"
         } catch(e) {}
     }
 
-    // Force hardware-accelerated H.264 (`avc1`) over slow software AV1/VP9 (`h264ify` for WebKitGTK):
-    // Intel VA-API `vah264dec` + multi-threaded `avdec_h264` decode 1080p60 at <5% CPU with zero frame drops!
-    const BLOCKED_VIDEO_CODECS_RE = /av01|vp0?9|vp8|webm|theora/i;
+    // Block ONLY AV1 (`av01`, which has no hardware decoder on Intel Ice Lake and falls back to slow libaom),
+    // while keeping VP9 (`vp09`/`webm`) and H.264 (`avc1`) enabled at full 1080p60 / 1440p60 / 4K60 quality
+    // decoded by Intel VA-API hardware (`vavp9dec:MAX` & `vah264dec:MAX`)!
+    const BLOCKED_VIDEO_CODECS_RE = /av01/i;
     try {
         if (window.MediaSource && typeof window.MediaSource.isTypeSupported === 'function') {
             const origIsSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
@@ -197,7 +198,7 @@ pub const ADBLOCK_JS: &str = r#"
                             configuration: config
                         });
                     }
-                    if (vType && /avc1|mp4/i.test(vType)) {
+                    if (vType && /vp0?9|avc1|mp4|webm/i.test(vType)) {
                         return Promise.resolve({
                             supported: true,
                             smooth: true,
