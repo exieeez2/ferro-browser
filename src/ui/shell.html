@@ -106,45 +106,35 @@
       background: rgba(0, 0, 0, 0.22);
     }
 
-    .strip-left-tools {
-      display: flex;
-      align-items: center;
-      padding: 0 4px;
-      gap: 2px;
-      border-right: 1px solid var(--border-hairline);
-      flex-shrink: 0;
-    }
-
     .tabs-scroll-area {
       display: flex;
       align-items: stretch;
       flex: 0 1 auto;
       min-width: 0;
-      overflow-x: auto;
-      overflow-y: hidden;
-      scrollbar-width: none;
-    }
-
-    .tabs-scroll-area::-webkit-scrollbar {
-      display: none;
+      max-width: calc(100% - 196px);
+      overflow: hidden;
+      padding-left: 4px;
     }
 
     .tabs-container {
       display: flex;
       align-items: stretch;
-      min-width: max-content;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
     }
 
-    /* Classic sleek Ferro tab design, smoothly adapting to corner_radius */
+    /* Chrome-style dynamic shrinking tabs: 200px ideal width, shrinking smoothly down to 30px */
     .tab {
       position: relative;
       display: flex;
       align-items: center;
       gap: 8px;
-      width: 176px;
-      min-width: 96px;
-      max-width: 210px;
-      padding: 0 10px 0 12px;
+      flex: 0 1 200px;
+      width: 200px;
+      min-width: 30px;
+      max-width: 200px;
+      padding: 0 8px 0 10px;
       background: transparent;
       color: var(--text-secondary);
       border-right: 1px solid var(--border-hairline);
@@ -153,8 +143,35 @@
       font-weight: 500;
       cursor: pointer;
       touch-action: none;
+      overflow: hidden;
       transition: background 140ms ease, color 140ms ease, border-radius 160ms var(--ease-out), opacity 140ms var(--ease-out), transform 170ms var(--ease-out), box-shadow 160ms var(--ease-out);
-      flex-shrink: 0;
+    }
+
+    .tab.tab-compact {
+      padding: 0 6px;
+      gap: 5px;
+    }
+
+    .tab.tab-compact:not(.active) .tab-close {
+      display: none;
+    }
+
+    .tab.tab-icon-only {
+      padding: 0 4px;
+      gap: 0;
+      justify-content: center;
+    }
+
+    .tab.tab-icon-only .tab-title {
+      display: none;
+    }
+
+    .tab.tab-icon-only:not(.active) .tab-close {
+      display: none;
+    }
+
+    .tab.tab-icon-only.active .tab-favicon {
+      display: none;
     }
 
     .tab.dragging {
@@ -181,9 +198,10 @@
     }
 
     .tab.pinned {
-      width: 40px;
-      min-width: 40px;
-      max-width: 40px;
+      flex: 0 0 38px;
+      width: 38px;
+      min-width: 38px;
+      max-width: 38px;
       padding: 0;
       justify-content: center;
       gap: 0;
@@ -584,16 +602,16 @@
       color: var(--accent);
     }
 
-    /* Chrome/Firefox-style Bookmarks Bar (28px) */
+    /* Chrome-style Bookmarks Bar (28px) with truncated labels & right '»' overflow button */
     .bookmarks-bar {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 4px;
       height: 28px;
       padding: 0 8px;
       background: var(--bg-toolbar);
-      overflow-x: auto;
-      scrollbar-width: none;
+      overflow: hidden;
       transition: background 0.2s ease;
     }
 
@@ -601,8 +619,13 @@
       background: rgba(24, 24, 30, 0.34);
     }
 
-    .bookmarks-bar::-webkit-scrollbar {
-      display: none;
+    .bookmarks-items {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
     }
 
     .bookmark-chip {
@@ -610,6 +633,7 @@
       align-items: center;
       gap: 6px;
       height: 21px;
+      max-width: 156px;
       padding: 0 8px;
       border: 1px solid transparent;
       background: transparent;
@@ -620,6 +644,7 @@
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
+      overflow: hidden;
       transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, border-radius 0.15s ease;
     }
 
@@ -627,6 +652,38 @@
       background: var(--bg-hover);
       color: var(--text-primary);
       border-color: var(--border-hairline);
+    }
+
+    .bookmark-chip-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }
+
+    .bm-overflow-btn {
+      width: 24px;
+      height: 21px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--text-secondary);
+      border-radius: var(--radius-ctrl);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 120ms ease, color 120ms ease, transform 120ms var(--ease-out);
+    }
+
+    .bm-overflow-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      border-color: var(--border-hairline);
+    }
+
+    .bm-overflow-btn:active {
+      transform: scale(0.91);
     }
 
     .bookmark-chip-icon {
@@ -746,19 +803,6 @@
   <div class="shell-container" id="shell" data-preset="false" data-rounded="true" data-custom-accent="false">
     <!-- Top Tab Strip -->
     <div class="tab-strip" id="tabStrip">
-      <div class="strip-left-tools">
-        <button class="icon-btn" id="stripScrollLeftBtn" title="Прокрутить вкладки влево">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 18 9 12 15 6"></polyline>
-          </svg>
-        </button>
-        <button class="icon-btn" id="stripScrollRightBtn" title="Прокрутить вкладки вправо">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-      </div>
-
       <div class="tabs-scroll-area" id="tabsScrollArea">
         <div class="tabs-container" id="tabsContainer"></div>
       </div>
@@ -910,7 +954,15 @@
     </div>
 
     <!-- Bookmarks Bar -->
-    <div class="bookmarks-bar" id="bookmarksBar"></div>
+    <div class="bookmarks-bar" id="bookmarksBar">
+      <div class="bookmarks-items" id="bookmarksItems"></div>
+      <button type="button" class="bm-overflow-btn" id="bmOverflowBtn" title="Другие закладки">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="13 17 18 12 13 7"></polyline>
+          <polyline points="6 17 11 12 6 7"></polyline>
+        </svg>
+      </button>
+    </div>
 
     <div class="loading-bar" id="loadingBar"></div>
   </div>
@@ -1309,20 +1361,86 @@
         });
 
         tabsContainer.appendChild(el);
-        if (isActive && shouldScrollToActive) {
-          requestAnimationFrame(() => {
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-          });
-        }
       });
       state.newTabId = null;
+      requestAnimationFrame(updateTabCompactClasses);
     }
+
+    function updateTabCompactClasses() {
+      const nodes = tabsContainer.querySelectorAll('.tab:not(.pinned)');
+      nodes.forEach(node => {
+        const w = node.offsetWidth;
+        node.classList.toggle('tab-compact', w > 0 && w < 82);
+        node.classList.toggle('tab-icon-only', w > 0 && w < 50);
+      });
+    }
+
+    const bookmarksItems = document.getElementById('bookmarksItems');
+    const bmOverflowBtn = document.getElementById('bmOverflowBtn');
+    let bmOverflowStartIndex = 0;
+
+    function updateBookmarksOverflow() {
+      const chips = Array.from(bookmarksItems.querySelectorAll('.bookmark-chip[data-bm-idx]'));
+      if (chips.length === 0) {
+        bmOverflowBtn.style.display = 'none';
+        bmOverflowStartIndex = 0;
+        return;
+      }
+
+      // Unhide all chips temporarily to measure natural widths
+      chips.forEach(c => { c.style.display = 'inline-flex'; });
+      bmOverflowBtn.style.display = 'none';
+
+      const totalBarWidth = bookmarksBar.clientWidth - 16;
+      if (totalBarWidth <= 0) return;
+
+      let totalNeeded = 0;
+      chips.forEach((c, idx) => {
+        totalNeeded += c.offsetWidth + (idx > 0 ? 4 : 0);
+      });
+
+      if (totalNeeded <= totalBarWidth) {
+        bmOverflowStartIndex = chips.length;
+        return;
+      }
+
+      // Reserve 28px on the right for the '»' chevron button
+      const avail = Math.max(40, totalBarWidth - 28);
+      let used = 0;
+      let firstHidden = chips.length;
+
+      for (let i = 0; i < chips.length; i++) {
+        const w = chips[i].offsetWidth + (i > 0 ? 4 : 0);
+        if (i > 0 && used + w > avail) {
+          firstHidden = i;
+          break;
+        }
+        used += w;
+      }
+
+      bmOverflowStartIndex = firstHidden;
+      for (let j = firstHidden; j < chips.length; j++) {
+        chips[j].style.display = 'none';
+      }
+      bmOverflowBtn.style.display = firstHidden < chips.length ? 'inline-flex' : 'none';
+    }
+
+    bmOverflowBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const r = bmOverflowBtn.getBoundingClientRect();
+      sendIpc({
+        action: 'bookmarks_overflow_menu',
+        id: bmOverflowStartIndex,
+        pass: `${Math.round(r.left + r.width / 2)},${Math.round(r.bottom)}`
+      });
+    });
 
     let bookmarksAnimatedOnce = false;
     function renderBookmarks() {
-      bookmarksBar.innerHTML = '';
+      bookmarksItems.innerHTML = '';
       if (!state.bookmarks || state.bookmarks.length === 0) {
-        bookmarksBar.innerHTML = '<span class="bookmark-chip" style="cursor:default;opacity:0.65;">Нет закладок — нажмите ☆ в адресной строке</span>';
+        bmOverflowBtn.style.display = 'none';
+        bookmarksItems.innerHTML = '<span class="bookmark-chip" style="cursor:default;opacity:0.65;max-width:none;">Нет закладок — нажмите ☆ в адресной строке</span>';
         return;
       }
 
@@ -1332,6 +1450,7 @@
       state.bookmarks.forEach((bm, idx) => {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.dataset.bmIdx = String(idx);
         btn.className = 'bookmark-chip' + (animateStagger ? ' chip-enter' : '');
         if (animateStagger) {
           btn.style.animationDelay = `${Math.min(idx * 25, 220)}ms`;
@@ -1340,7 +1459,7 @@
         const iconHtml = getSiteIconHtml(bm.url, bm.title);
         btn.innerHTML = `
           <span class="bookmark-chip-icon">${iconHtml}</span>
-          <span>${escapeHtml(bm.title)}</span>
+          <span class="bookmark-chip-label">${escapeHtml(bm.title)}</span>
         `;
         btn.addEventListener('click', () => {
           sendIpc({ action: 'navigate', url: bm.url });
@@ -1361,8 +1480,10 @@
             pass: `${Math.round(e.clientX)},${Math.round(e.clientY)}`
           });
         });
-        bookmarksBar.appendChild(btn);
+        bookmarksItems.appendChild(btn);
       });
+
+      requestAnimationFrame(updateBookmarksOverflow);
     }
 
     const zoomBadge = document.getElementById('zoomBadge');
@@ -1574,20 +1695,19 @@
       window.ferro.applySettings(s);
     };
 
-    // Horizontal wheel scroll on tab strip + left/right scroll buttons
-    tabsScrollArea.addEventListener('wheel', (e) => {
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-        e.preventDefault();
-        tabsScrollArea.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
-
-    document.getElementById('stripScrollLeftBtn').addEventListener('click', () => {
-      tabsScrollArea.scrollBy({ left: -180, behavior: 'smooth' });
-    });
-    document.getElementById('stripScrollRightBtn').addEventListener('click', () => {
-      tabsScrollArea.scrollBy({ left: 180, behavior: 'smooth' });
-    });
+    // Recompute compact tab widths & bookmarks '»' overflow whenever window resizes
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(() => {
+        updateTabCompactClasses();
+        updateBookmarksOverflow();
+      });
+      ro.observe(shellEl);
+    } else {
+      window.addEventListener('resize', () => {
+        updateTabCompactClasses();
+        updateBookmarksOverflow();
+      });
+    }
 
     // Double-click ANY empty tab strip space to maximize/restore; drag >= 6px to move window!
     // (Never call window_drag on initial mousedown — otherwise Wayland steals pointer grab and kills dblclick!)

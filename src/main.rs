@@ -2970,6 +2970,59 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 });
             }
         }
+        "bookmarks_overflow_menu" => {
+            let start_idx = msg.id.unwrap_or(0) as usize;
+            let win_w = state_rc.try_borrow().map(|st| st.window.size().0).unwrap_or(1180);
+            let (mx, my) = parse_menu_coords(msg.pass.as_deref(), (win_w - 20).max(20), 98);
+            let state_weak = Rc::downgrade(state_rc);
+            glib::idle_add_local_once(move || {
+                if let Some(state_rc) = state_weak.upgrade() {
+                    let overflow_items: Vec<(String, String)> = state_rc
+                        .try_borrow()
+                        .map(|st| {
+                            st.bookmarks
+                                .items
+                                .iter()
+                                .skip(start_idx)
+                                .take(32)
+                                .map(|b| (b.title.clone(), b.url.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    if overflow_items.is_empty() {
+                        return;
+                    }
+
+                    let mut entries: Vec<PopoverEntry> = Vec::new();
+                    for (title, url) in overflow_items {
+                        let raw_label = if title.trim().is_empty() { &url } else { &title };
+                        let truncated: String = if raw_label.chars().count() > 42 {
+                            let s: String = raw_label.chars().take(41).collect();
+                            format!("{}…", s)
+                        } else {
+                            raw_label.to_string()
+                        };
+                        let s_rc = state_rc.clone();
+                        entries.push(PopoverEntry::Item(
+                            truncated,
+                            Box::new(move || {
+                                handle_ipc(&s_rc, IpcMessage {
+                                    action: "navigate".to_string(),
+                                    url: Some(url.clone()),
+                                    id: None,
+                                    title: None,
+                                    pass: None,
+                                    settings: None,
+                                });
+                            }),
+                        ));
+                    }
+
+                    show_top_popover(&state_rc, mx, my, entries);
+                }
+            });
+        }
         "window_drag" => {
             if let Ok(state) = state_rc.try_borrow() {
                 if let Some(display) = gdk::Display::default() {
