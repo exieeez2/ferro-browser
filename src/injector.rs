@@ -3022,6 +3022,16 @@ pub const HOTKEYS_JS: &str = r##"
             return;
         }
 
+        // Ctrl + N (or Cyrillic Т): New Window
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т' || e.code === 'KeyN')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (window.ipc) {
+                window.ipc.postMessage(JSON.stringify({ action: 'new_window' }));
+            }
+            return;
+        }
+
         // Ctrl + W (or Cyrillic Ц): Close Tab
         if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === 'w' || e.key === 'W' || e.key === 'ц' || e.key === 'Ц' || e.code === 'KeyW')) {
             e.preventDefault();

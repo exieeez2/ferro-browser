@@ -12,9 +12,9 @@ mod webkit_filter;
 use gtk::gdk;
 use gtk::prelude::*;
 use serde::Deserialize;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use webkit2gtk::{
     CacheModel, DownloadExt, FindControllerExt, FindOptions, HardwareAccelerationPolicy, LoadEvent,
@@ -49,12 +49,49 @@ const NEWTAB_HTML: &str = include_str!("ui/newtab.html");
 const TOKENS_HTML: &str = include_str!("ui/tokens.html");
 const SETTINGS_HTML: &str = include_str!("ui/settings.html");
 
+static NEXT_TAB_ID: AtomicU32 = AtomicU32::new(1);
+
+thread_local! {
+    static ALL_WINDOWS: RefCell<Vec<Rc<RefCell<BrowserState>>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn open_windows_snapshot() -> Vec<Rc<RefCell<BrowserState>>> {
+    ALL_WINDOWS.with(|wins| wins.borrow().clone())
+}
+
+fn open_windows_count() -> usize {
+    ALL_WINDOWS.with(|wins| wins.borrow().len())
+}
+
+#[derive(Clone)]
+struct SharedBrowserCore {
+    web_context: Rc<RefCell<wry::WebContext>>,
+    adblocker: Arc<AdBlocker>,
+    native_filter: Rc<RefCell<Option<WebKitFilter>>>,
+    css_provider: gtk::CssProvider,
+    downloads: Arc<Mutex<DownloadsData>>,
+    lens_preview: Arc<Mutex<String>>,
+    page_source_cache: Arc<Mutex<(String, String)>>,
+    settings_dirty: Arc<AtomicBool>,
+    bookmarks_dirty: Arc<AtomicBool>,
+    history_dirty: Arc<AtomicBool>,
+    passwords_dirty: Arc<AtomicBool>,
+    download_handler_attached: Rc<Cell<bool>>,
+}
+
+enum InitialWindowMode {
+    Startup,
+    NewBlankWindow,
+    DetachedTab { tab: Tab, size: (i32, i32) },
+}
+
 struct PrewarmedTab {
     id: u32,
     tab_name: String,
     webview: Rc<WebView>,
     inner: webkit2gtk::WebView,
     container: gtk::Box,
+    owner: Rc<RefCell<Weak<RefCell<BrowserState>>>>,
 }
 
 struct Tab {
@@ -71,9 +108,11 @@ struct Tab {
     webview: Rc<WebView>,
     inner: webkit2gtk::WebView,
     container: gtk::Box,
+    owner: Rc<RefCell<Weak<RefCell<BrowserState>>>>,
 }
 
 struct BrowserState {
+    core: SharedBrowserCore,
     window: gtk::Window,
     top_box: gtk::Box,
     hpaned: gtk::Paned,
@@ -93,19 +132,18 @@ struct BrowserState {
     tabs: Vec<Tab>,
     closed_tabs: Vec<(String, String)>,
     active_tab_id: Option<u32>,
-    next_tab_id: u32,
     bookmarks: BookmarksData,
     history: HistoryData,
     passwords: PasswordsData,
     downloads: Arc<Mutex<DownloadsData>>,
     pending_password: Option<(String, String, String)>,
     settings: BrowserSettings,
-    web_context: wry::WebContext,
+    web_context: Rc<RefCell<wry::WebContext>>,
     adblocker: Arc<AdBlocker>,
-    native_filter: Option<WebKitFilter>,
+    native_filter: Rc<RefCell<Option<WebKitFilter>>>,
     dark_mode: bool,
     theme: String,
-    download_handler_attached: bool,
+    download_handler_attached: Rc<Cell<bool>>,
     settings_dirty: Arc<AtomicBool>,
     bookmarks_dirty: Arc<AtomicBool>,
     history_dirty: Arc<AtomicBool>,
@@ -440,13 +478,23 @@ fn render_source_viewer_html(url: &str, raw_html: &str, s: &BrowserSettings) -> 
     )
 }
 
+fn find_active_window_webview() -> Option<Rc<WebView>> {
+    let wins = open_windows_snapshot();
+    let target = wins
+        .iter()
+        .find(|w| w.try_borrow().map(|s| s.window.is_active()).unwrap_or(false))
+        .or_else(|| wins.last())?;
+    target.try_borrow().ok().and_then(|s| {
+        s.active_tab_id
+            .and_then(|id| s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone()))
+    })
+}
+
 fn attach_download_handler(
     ctx: &webkit2gtk::WebContext,
-    state_weak: Weak<RefCell<BrowserState>>,
     downloads_store: Arc<Mutex<DownloadsData>>,
 ) {
     ctx.connect_download_started(move |_ctx, download| {
-        let state_weak_dest = state_weak.clone();
         let dl_store_start = downloads_store.clone();
         let dl_id_cell = Rc::new(RefCell::new(0_u64));
         let dl_id_for_dest = dl_id_cell.clone();
@@ -504,25 +552,18 @@ fn attach_download_handler(
             }
 
             let saved_display = dest_path.to_string_lossy().replace('\\', "/").replace('\'', "\\'");
-            if let Some(state_rc) = state_weak_dest.upgrade() {
-                let active_wv = state_rc.try_borrow().ok().and_then(|s| {
-                    s.active_tab_id.and_then(|id| {
-                        s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
-                    })
-                });
-                if let Some(wv) = active_wv {
-                    let js = format!(
-                        r#"(function(){{
-                            const t = document.createElement('div');
-                            t.textContent = 'Загрузка начата: {0}';
-                            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
-                            (document.body||document.documentElement).appendChild(t);
-                            setTimeout(() => t.remove(), 2600);
-                        }})();"#,
-                        saved_display
-                    );
-                    let _ = wv.evaluate_script(&js);
-                }
+            if let Some(wv) = find_active_window_webview() {
+                let js = format!(
+                    r#"(function(){{
+                        const t = document.createElement('div');
+                        t.textContent = 'Загрузка начата: {0}';
+                        t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
+                        (document.body||document.documentElement).appendChild(t);
+                        setTimeout(() => t.remove(), 2600);
+                    }})();"#,
+                    saved_display
+                );
+                let _ = wv.evaluate_script(&js);
             }
             true
         });
@@ -550,7 +591,6 @@ fn attach_download_handler(
             }
         });
 
-        let state_weak_fin = state_weak.clone();
         let dl_store_fin = downloads_store.clone();
         let dl_id_for_fin = dl_id_cell;
         download.connect_finished(move |dl| {
@@ -564,29 +604,43 @@ fn attach_download_handler(
                 .destination()
                 .map(|d| d.strip_prefix("file://").unwrap_or(&d).to_string())
                 .unwrap_or_default();
-            if let Some(state_rc) = state_weak_fin.upgrade() {
-                let active_wv = state_rc.try_borrow().ok().and_then(|s| {
-                    s.active_tab_id.and_then(|id| {
-                        s.tabs.iter().find(|t| t.id == id).map(|t| t.webview.clone())
-                    })
-                });
-                if let Some(wv) = active_wv {
-                    let safe_dest = dest.replace('\\', "/").replace('\'', "\\'");
-                    let js = format!(
-                        r#"(function(){{
-                            const t = document.createElement('div');
-                            t.textContent = 'Файл сохранён: {0}';
-                            t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
-                            (document.body||document.documentElement).appendChild(t);
-                            setTimeout(() => t.remove(), 3200);
-                        }})();"#,
-                        safe_dest
-                    );
-                    let _ = wv.evaluate_script(&js);
-                }
+            if let Some(wv) = find_active_window_webview() {
+                let safe_dest = dest.replace('\\', "/").replace('\'', "\\'");
+                let js = format!(
+                    r#"(function(){{
+                        const t = document.createElement('div');
+                        t.textContent = 'Файл сохранён: {0}';
+                        t.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:2147483647;background:#19191c;color:#f2f2f5;border:1px solid #383842;border-radius:6px;padding:9px 14px;font-family:Inter,sans-serif;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,0.55);';
+                        (document.body||document.documentElement).appendChild(t);
+                        setTimeout(() => t.remove(), 3200);
+                    }})();"#,
+                    safe_dest
+                );
+                let _ = wv.evaluate_script(&js);
             }
         });
     });
+}
+
+fn broadcast_settings_from_disk() {
+    let loaded = BrowserSettings::load_or_default();
+    for win_rc in open_windows_snapshot() {
+        if let Ok(mut st) = win_rc.try_borrow_mut() {
+            st.theme = loaded.theme_mode.clone();
+            st.settings = loaded.clone();
+        }
+        sync_settings_to_ui(&win_rc);
+    }
+}
+
+fn broadcast_bookmarks_from_disk() {
+    let loaded = BookmarksData::load_or_default();
+    for win_rc in open_windows_snapshot() {
+        if let Ok(mut st) = win_rc.try_borrow_mut() {
+            st.bookmarks = loaded.clone();
+        }
+        sync_bookmarks_to_ui(&win_rc);
+    }
 }
 
 fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
@@ -603,7 +657,7 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
             let enable_webgl = state.settings.enable_webgl;
             let enable_js = state.settings.enable_javascript;
             let adblock_enabled = state.settings.adblock_enabled;
-            let native_filter = state.native_filter.clone();
+            let native_filter = state.native_filter.borrow().clone();
             state.adblocker.set_enabled(adblock_enabled);
 
             for t in &mut state.tabs {
@@ -672,42 +726,54 @@ fn sync_settings_to_ui(state_rc: &Rc<RefCell<BrowserState>>) {
 }
 
 fn ensure_and_open_side_panel(state_rc: &Rc<RefCell<BrowserState>>, mode: &str, target_url: &str) {
-    let needs_init = state_rc.try_borrow().map(|s| s.side_webview.is_none()).unwrap_or(false);
-    if needs_init {
-        if let Ok(mut st) = state_rc.try_borrow_mut() {
-            let hdr_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            hdr_box.set_size_request(-1, 36);
-            st.side_box.pack_start(&hdr_box, false, false, 0);
+    let init_ctx = state_rc.try_borrow().ok().and_then(|st| {
+        if st.side_webview.is_none() {
+            Some((
+                st.side_box.clone(),
+                compute_surface_rgba(&st.settings),
+                serde_json::to_string(&st.settings).unwrap_or_else(|_| "{}".to_string()),
+                st.web_context.clone(),
+            ))
+        } else {
+            None
+        }
+    });
 
-            let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-            st.side_box.pack_start(&content_box, true, true, 0);
+    if let Some((side_box, surface_rgba, s_json, web_ctx_rc)) = init_ctx {
+        let hdr_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        hdr_box.set_size_request(-1, 36);
+        side_box.pack_start(&hdr_box, false, false, 0);
 
-            let surface_rgba = compute_surface_rgba(&st.settings);
-            let s_json = serde_json::to_string(&st.settings).unwrap_or_else(|_| "{}".to_string());
-            let hdr_init = format!(
-                "window.addEventListener('DOMContentLoaded', function() {{ if (window.applySettings) window.applySettings({}); }});",
-                s_json
-            );
+        let content_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        side_box.pack_start(&content_box, true, true, 0);
 
-            let state_for_hdr = state_rc.clone();
-            if let Ok(hdr_wv) = WebViewBuilder::new()
-                .with_transparent(true)
-                .with_initialization_script(&hdr_init)
-                .with_html(render_side_header_html())
-                .with_ipc_handler(move |req| {
-                    if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
-                        handle_ipc(&state_for_hdr, msg);
-                    }
-                })
-                .build_gtk(&hdr_box)
-            {
+        let hdr_init = format!(
+            "window.addEventListener('DOMContentLoaded', function() {{ if (window.applySettings) window.applySettings({}); }});",
+            s_json
+        );
+
+        let state_for_hdr = state_rc.clone();
+        let built_hdr = WebViewBuilder::new()
+            .with_transparent(true)
+            .with_initialization_script(&hdr_init)
+            .with_html(render_side_header_html())
+            .with_ipc_handler(move |req| {
+                if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
+                    handle_ipc(&state_for_hdr, msg);
+                }
+            })
+            .build_gtk(&hdr_box)
+            .ok()
+            .map(|hdr_wv| {
                 hdr_wv.webview().set_background_color(&surface_rgba);
                 hdr_wv.webview().connect_context_menu(|_, _, _, _| true);
-                st.side_header_webview = Some(Rc::new(hdr_wv));
-            }
+                Rc::new(hdr_wv)
+            });
 
-            let state_for_body = state_rc.clone();
-            if let Ok(body_wv) = WebViewBuilder::new_with_web_context(&mut st.web_context)
+        let state_for_body = state_rc.clone();
+        let built_body = {
+            let mut web_ctx = web_ctx_rc.borrow_mut();
+            WebViewBuilder::new_with_web_context(&mut *web_ctx)
                 .with_transparent(true)
                 .with_ipc_handler(move |req| {
                     if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
@@ -715,49 +781,55 @@ fn ensure_and_open_side_panel(state_rc: &Rc<RefCell<BrowserState>>, mode: &str, 
                     }
                 })
                 .build_gtk(&content_box)
-            {
-                let inner = body_wv.webview();
-                inner.set_background_color(&surface_rgba);
-                if let Some(wk_s) = WebViewExt::settings(&inner) {
-                    wk_s.set_user_agent(Some(
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                    ));
-                    wk_s.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
-                    wk_s.set_enable_javascript(true);
-                }
-                let state_weak = Rc::downgrade(state_rc);
-                inner.connect_decide_policy(move |_wv, decision, decision_type| {
-                    if decision_type == PolicyDecisionType::NewWindowAction {
-                        if let Ok(nav) = decision.clone().downcast::<NavigationPolicyDecision>() {
-                            #[allow(deprecated)]
-                            if let Some(req) = nav.request() {
-                                if let Some(uri) = req.uri() {
-                                    if let Some(s_rc) = state_weak.upgrade() {
-                                        create_tab(&s_rc, uri.as_str());
-                                    }
-                                    decision.ignore();
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                    false
-                });
-                let state_weak_uri = Rc::downgrade(state_rc);
-                inner.connect_uri_notify(move |wv| {
-                    if let Some(uri) = wv.uri() {
-                        let u = uri.to_string();
-                        if u.starts_with("https://www.google.com/search") || u.contains("vsrid=") {
-                            if let Some(s_rc) = state_weak_uri.upgrade() {
-                                if let Ok(mut st) = s_rc.try_borrow_mut() {
-                                    st.last_lens_result_url = Some(u);
-                                }
-                            }
-                        }
-                    }
-                });
-                st.side_webview = Some(Rc::new(body_wv));
+                .ok()
+        }
+        .map(|body_wv| {
+            let inner = body_wv.webview();
+            inner.set_background_color(&surface_rgba);
+            if let Some(wk_s) = WebViewExt::settings(&inner) {
+                wk_s.set_user_agent(Some(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                ));
+                wk_s.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Always);
+                wk_s.set_enable_javascript(true);
             }
+            let state_weak = Rc::downgrade(state_rc);
+            inner.connect_decide_policy(move |_wv, decision, decision_type| {
+                if decision_type == PolicyDecisionType::NewWindowAction {
+                    if let Ok(nav) = decision.clone().downcast::<NavigationPolicyDecision>() {
+                        #[allow(deprecated)]
+                        if let Some(req) = nav.request() {
+                            if let Some(uri) = req.uri() {
+                                if let Some(s_rc) = state_weak.upgrade() {
+                                    create_tab(&s_rc, uri.as_str());
+                                }
+                                decision.ignore();
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            });
+            let state_weak_uri = Rc::downgrade(state_rc);
+            inner.connect_uri_notify(move |wv| {
+                if let Some(uri) = wv.uri() {
+                    let u = uri.to_string();
+                    if u.starts_with("https://www.google.com/search") || u.contains("vsrid=") {
+                        if let Some(s_rc) = state_weak_uri.upgrade() {
+                            if let Ok(mut st) = s_rc.try_borrow_mut() {
+                                st.last_lens_result_url = Some(u);
+                            }
+                        }
+                    }
+                }
+            });
+            Rc::new(body_wv)
+        });
+
+        if let Ok(mut st) = state_rc.try_borrow_mut() {
+            st.side_header_webview = built_hdr;
+            st.side_webview = built_body;
         }
     }
 
@@ -867,6 +939,10 @@ fn close_tab(state_rc: &Rc<RefCell<BrowserState>>, tab_id: u32) {
             stack.set_visible_child_name(&format!("tab_{}", new_id));
         }
         sync_tabs_to_ui(state_rc);
+    } else if open_windows_count() > 1 {
+        if let Ok(state) = state_rc.try_borrow() {
+            state.window.close();
+        }
     } else {
         create_tab(state_rc, "ferro://newtab");
     }
@@ -919,6 +995,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, raw_target_url: &str) -> u32
                         webview: spare.webview,
                         inner: spare.inner,
                         container: spare.container,
+                        owner: spare.owner,
                     });
                     state.active_tab_id = Some(id);
                     state.stack.set_visible_child_name(&t_name);
@@ -963,6 +1040,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, raw_target_url: &str) -> u32
                 webview: built.webview,
                 inner: built.inner,
                 container: built.container,
+                owner: built.owner,
             });
             state.active_tab_id = Some(tab_id);
             state.stack.set_visible_child_name(&tab_name);
@@ -977,6 +1055,7 @@ fn create_tab(state_rc: &Rc<RefCell<BrowserState>>, raw_target_url: &str) -> u32
 fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str) -> Option<PrewarmedTab> {
     let (
         tab_id,
+        web_ctx_rc,
         adblocker,
         native_filter,
         stack,
@@ -991,18 +1070,19 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         downloads_store,
         source_cache,
         lens_preview,
+        dl_attached_flag,
     ) = {
-        if let Ok(mut state) = state_rc.try_borrow_mut() {
-            let id = state.next_tab_id;
-            state.next_tab_id += 1;
+        if let Ok(state) = state_rc.try_borrow() {
+            let id = NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed);
             let autofill = state.passwords.generate_autofill_script();
             let theme_css = state.settings.generate_css_variables();
             let s_snap = state.settings.clone();
             let s_json = serde_json::to_string(&state.settings).unwrap_or_else(|_| "{}".to_string());
             (
                 id,
+                state.web_context.clone(),
                 state.adblocker.clone(),
-                state.native_filter.clone(),
+                state.native_filter.borrow().clone(),
                 state.stack.clone(),
                 autofill,
                 theme_css,
@@ -1015,11 +1095,14 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
                 state.downloads.clone(),
                 state.page_source_cache.clone(),
                 state.lens_preview.clone(),
+                state.download_handler_attached.clone(),
             )
         } else {
             return None;
         }
     };
+
+    let owner: Rc<RefCell<Weak<RefCell<BrowserState>>>> = Rc::new(RefCell::new(Rc::downgrade(state_rc)));
 
     let tab_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let tab_name = format!("tab_{}", tab_id);
@@ -1083,13 +1166,10 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         autofill_js = autofill_script
     );
 
-    let mut state_mut = match state_rc.try_borrow_mut() {
-        Ok(s) => s,
-        Err(_) => return None,
-    };
-
-    let protocol_already_registered = state_mut.web_context.is_custom_protocol_registered("ferro");
-    let mut builder = WebViewBuilder::new_with_web_context(&mut state_mut.web_context);
+    let downloads_for_dl_handler = downloads_store.clone();
+    let mut web_ctx = web_ctx_rc.borrow_mut();
+    let protocol_already_registered = web_ctx.is_custom_protocol_registered("ferro");
+    let mut builder = WebViewBuilder::new_with_web_context(&mut *web_ctx);
     if !protocol_already_registered {
         let blocked_counter = adblocker.blocked_counter();
         builder = builder.with_custom_protocol("ferro".into(), move |_id, req| {
@@ -1317,14 +1397,19 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         });
     }
 
-    let state_for_tab_ipc = state_rc.clone();
+    let owner_for_ipc = owner.clone();
     let builder = builder
         .with_initialization_script(&init_script)
         .with_autoplay(true)
         .with_transparent(true)
         .with_ipc_handler(move |req| {
             match serde_json::from_str::<IpcMessage>(req.body()) {
-                Ok(msg) => handle_ipc(&state_for_tab_ipc, msg),
+                Ok(msg) => {
+                    let cur_state = owner_for_ipc.borrow().upgrade();
+                    if let Some(s_rc) = cur_state {
+                        handle_ipc(&s_rc, msg);
+                    }
+                }
                 Err(e) => eprintln!("[Ferro Tab IPC Parse Error] {:?}: {}", e, req.body()),
             }
         });
@@ -1336,7 +1421,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
             return None;
         }
     };
-    drop(state_mut);
+    drop(web_ctx);
 
     let inner_wv = webview.webview();
 
@@ -1346,15 +1431,11 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     inner_wv.set_zoom_level((settings_snapshot.default_zoom.clamp(50, 200) as f64) / 100.0);
 
     // Attach global WebKit download handler & WebBrowser cache model once on the shared WebContext
-    {
-        if let Ok(mut st) = state_rc.try_borrow_mut() {
-            if !st.download_handler_attached {
-                if let Some(wk_ctx) = inner_wv.context() {
-                    wk_ctx.set_cache_model(CacheModel::WebBrowser);
-                    attach_download_handler(&wk_ctx, Rc::downgrade(state_rc), st.downloads.clone());
-                    st.download_handler_attached = true;
-                }
-            }
+    if !dl_attached_flag.get() {
+        if let Some(wk_ctx) = inner_wv.context() {
+            wk_ctx.set_cache_model(CacheModel::WebBrowser);
+            attach_download_handler(&wk_ctx, downloads_for_dl_handler);
+            dl_attached_flag.set(true);
         }
     }
 
@@ -1394,14 +1475,15 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         inner_wv.load_uri(target_url);
     }
 
-    // Hook WebKitGTK signals
-    let state_weak: Weak<RefCell<BrowserState>> = Rc::downgrade(state_rc);
+    // Hook WebKitGTK signals via dynamic `owner` so torn-off tabs seamlessly route to their new window
+    let owner_load = owner.clone();
     let tab_id_copy = tab_id;
     inner_wv.connect_load_changed(move |wv, event| {
         if matches!(event, LoadEvent::Committed | LoadEvent::Finished) {
             wv.queue_draw();
         }
-        if let Some(state_rc) = state_weak.upgrade() {
+        let cur_state = owner_load.borrow().upgrade();
+        if let Some(state_rc) = cur_state {
             let is_loading = matches!(event, LoadEvent::Started | LoadEvent::Redirected);
             let can_back = wv.can_go_back();
             let can_fwd = wv.can_go_forward();
@@ -1462,18 +1544,20 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     });
 
     // True HTML5 / YouTube video fullscreen: hide top chrome on enter, restore on leave
-    let state_weak_fs_in = Rc::downgrade(state_rc);
+    let owner_fs_in = owner.clone();
     inner_wv.connect_enter_fullscreen(move |_wv| {
-        if let Some(state_rc) = state_weak_fs_in.upgrade() {
+        let cur_state = owner_fs_in.borrow().upgrade();
+        if let Some(state_rc) = cur_state {
             if let Ok(state) = state_rc.try_borrow() {
                 state.top_box.hide();
             }
         }
         false
     });
-    let state_weak_fs_out = Rc::downgrade(state_rc);
+    let owner_fs_out = owner.clone();
     inner_wv.connect_leave_fullscreen(move |_wv| {
-        if let Some(state_rc) = state_weak_fs_out.upgrade() {
+        let cur_state = owner_fs_out.borrow().upgrade();
+        if let Some(state_rc) = cur_state {
             if let Ok(state) = state_rc.try_borrow() {
                 state.top_box.show();
             }
@@ -1481,9 +1565,10 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         false
     });
 
-    let state_weak = Rc::downgrade(state_rc);
+    let owner_uri = owner.clone();
     inner_wv.connect_uri_notify(move |wv| {
-        if let Some(state_rc) = state_weak.upgrade() {
+        let cur_state = owner_uri.borrow().upgrade();
+        if let Some(state_rc) = cur_state {
             let new_uri = wv.uri().map(|u| u.to_string()).unwrap_or_default();
             {
                 if let Ok(mut state) = state_rc.try_borrow_mut() {
@@ -1503,9 +1588,10 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         }
     });
 
-    let state_weak = Rc::downgrade(state_rc);
+    let owner_title = owner.clone();
     inner_wv.connect_title_notify(move |wv| {
-        if let Some(state_rc) = state_weak.upgrade() {
+        let cur_state = owner_title.borrow().upgrade();
+        if let Some(state_rc) = cur_state {
             let new_title = wv.title().map(|t| t.to_string()).unwrap_or_else(|| "Новая вкладка".to_string());
             {
                 if let Ok(mut state) = state_rc.try_borrow_mut() {
@@ -1519,7 +1605,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
     });
 
     // Handle new window requests (target="_blank" or window.open) & block ad popups
-    let state_weak = Rc::downgrade(state_rc);
+    let owner_policy = owner.clone();
     let adblocker_policy = adblocker;
     inner_wv.connect_decide_policy(move |_wv, decision, decision_type| {
         match decision_type {
@@ -1534,7 +1620,8 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
                                 decision.ignore();
                                 return true;
                             }
-                            if let Some(state_rc) = state_weak.upgrade() {
+                            let cur_state = owner_policy.borrow().upgrade();
+                            if let Some(state_rc) = cur_state {
                                 create_tab(&state_rc, uri_str);
                             }
                             decision.ignore();
@@ -1579,6 +1666,7 @@ fn build_raw_tab_webview(state_rc: &Rc<RefCell<BrowserState>>, target_url: &str)
         webview,
         inner: inner_wv,
         container: tab_box,
+        owner,
     })
 }
 
@@ -1840,22 +1928,25 @@ fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &s
         start_sec = start_sec
     );
 
-    let mut st_mut = match state_rc.try_borrow_mut() {
-        Ok(s) => s,
+    let web_ctx_rc = match state_rc.try_borrow() {
+        Ok(s) => s.web_context.clone(),
         Err(_) => return,
     };
 
     let state_for_pip_ipc = state_rc.clone();
-    let pip_wv_res = WebViewBuilder::new_with_web_context(&mut st_mut.web_context)
-        .with_autoplay(true)
-        .with_initialization_script(&pip_init_js)
-        .with_url(target_url)
-        .with_ipc_handler(move |req| {
-            if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
-                handle_ipc(&state_for_pip_ipc, msg);
-            }
-        })
-        .build_gtk(&root_box);
+    let pip_wv_res = {
+        let mut web_ctx = web_ctx_rc.borrow_mut();
+        WebViewBuilder::new_with_web_context(&mut *web_ctx)
+            .with_autoplay(true)
+            .with_initialization_script(&pip_init_js)
+            .with_url(target_url)
+            .with_ipc_handler(move |req| {
+                if let Ok(msg) = serde_json::from_str::<IpcMessage>(req.body()) {
+                    handle_ipc(&state_for_pip_ipc, msg);
+                }
+            })
+            .build_gtk(&root_box)
+    };
 
     let Ok(pip_wv) = pip_wv_res else { return };
     let inner = pip_wv.webview();
@@ -1873,8 +1964,9 @@ fn open_floating_pip_window(state_rc: &Rc<RefCell<BrowserState>>, target_url: &s
     }
 
     let pip_rc = Rc::new(pip_wv);
-    st_mut.pip_window = Some((pip_win.clone(), pip_rc, origin_tab_id));
-    drop(st_mut);
+    if let Ok(mut st_mut) = state_rc.try_borrow_mut() {
+        st_mut.pip_window = Some((pip_win.clone(), pip_rc, origin_tab_id));
+    }
 
     let state_weak = Rc::downgrade(state_rc);
     pip_win.connect_delete_event(move |_, _| {
@@ -1907,42 +1999,114 @@ fn save_current_session(state_rc: &Rc<RefCell<BrowserState>>) {
 fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
     match msg.action.as_str() {
         "ui_ready" => {
+            let top_settings = state_rc.try_borrow().ok().map(|st| {
+                update_gtk_menu_css(&st.css_provider, &st.settings);
+                let top_h = if st.settings.show_bookmarks_bar { 102 } else { 74 };
+                st.top_box.set_size_request(-1, top_h);
+                let surface_rgba = compute_surface_rgba(&st.settings);
+                if let Some(top) = &st.top_webview {
+                    top.webview().set_background_color(&surface_rgba);
+                }
+                (
+                    serde_json::to_string(&st.settings).unwrap_or_else(|_| "{}".to_string()),
+                    st.top_webview.clone(),
+                    st.dark_mode,
+                )
+            });
+            if let Some((s_json, Some(top), dark_mode)) = top_settings {
+                let _ = top.evaluate_script(&format!(
+                    "if (window.ferro && window.ferro.applySettings) {{ window.ferro.applySettings({0}); }}",
+                    s_json
+                ));
+                let _ = top.evaluate_script(&format!(
+                    "if (window.ferro) {{ window.ferro.setDarkModeStatus({}); }}",
+                    dark_mode
+                ));
+            }
             sync_tabs_to_ui(state_rc);
             sync_bookmarks_to_ui(state_rc);
             sync_adblock_to_ui(state_rc);
-            sync_settings_to_ui(state_rc);
-            let dark_mode = state_rc.try_borrow().map(|s| s.dark_mode).unwrap_or(false);
-            send_to_ui(state_rc, &format!("if (window.ferro) {{ window.ferro.setDarkModeStatus({}); }}", dark_mode));
         }
         "sync_settings" => {
-            if let Ok(mut state) = state_rc.try_borrow_mut() {
-                state.settings = BrowserSettings::load_or_default();
-            }
-            sync_settings_to_ui(state_rc);
+            broadcast_settings_from_disk();
         }
         "save_settings" => {
             if let Some(new_s) = msg.settings {
                 let _ = new_s.save();
-                if let Ok(mut state) = state_rc.try_borrow_mut() {
-                    state.theme = new_s.theme_mode.clone();
-                    state.settings = new_s;
-                }
-            } else if let Ok(mut state) = state_rc.try_borrow_mut() {
-                let loaded = BrowserSettings::load_or_default();
-                state.theme = loaded.theme_mode.clone();
-                state.settings = loaded;
             }
-            sync_settings_to_ui(state_rc);
+            broadcast_settings_from_disk();
         }
         "reload_bookmarks" => {
-            if let Ok(mut state) = state_rc.try_borrow_mut() {
-                state.bookmarks = BookmarksData::load_or_default();
-            }
-            sync_bookmarks_to_ui(state_rc);
+            broadcast_bookmarks_from_disk();
         }
         "new_tab" => {
             let url = msg.url.as_deref().unwrap_or("ferro://newtab");
             create_tab(state_rc, url);
+        }
+        "new_window" => {
+            let core_opt = state_rc.try_borrow().ok().map(|s| s.core.clone());
+            if let Some(core) = core_opt {
+                glib::idle_add_local_once(move || {
+                    let new_win = spawn_browser_window(&core, InitialWindowMode::NewBlankWindow);
+                    if let Ok(st) = new_win.try_borrow() {
+                        st.window.present();
+                    };
+                });
+            }
+        }
+        "detach_tab_to_window" => {
+            if let Some(tab_id) = msg.id {
+                let detach_payload = {
+                    if let Ok(mut state) = state_rc.try_borrow_mut() {
+                        if state.tabs.len() <= 1 {
+                            None
+                        } else if let Some(idx) = state.tabs.iter().position(|t| t.id == tab_id) {
+                            let mut detached = state.tabs.remove(idx);
+                            detached.is_pinned = false;
+                            let src_size = state.window.size();
+                            let src_stack = state.stack.clone();
+                            let core = state.core.clone();
+
+                            let next_active = if state.active_tab_id == Some(tab_id) {
+                                let new_idx = if idx > 0 { idx - 1 } else { 0 };
+                                let new_id = state.tabs[new_idx].id;
+                                state.active_tab_id = Some(new_id);
+                                Some(new_id)
+                            } else {
+                                state.active_tab_id
+                            };
+
+                            Some((detached, src_stack, src_size, next_active, core))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((detached_tab, src_stack, src_size, next_active, core)) = detach_payload {
+                    // Detach live WebView container from source window GtkStack (without destroying or reloading it!)
+                    src_stack.remove(&detached_tab.container);
+                    if let Some(new_id) = next_active {
+                        src_stack.set_visible_child_name(&format!("tab_{}", new_id));
+                    }
+                    sync_tabs_to_ui(state_rc);
+
+                    glib::idle_add_local_once(move || {
+                        let new_win = spawn_browser_window(
+                            &core,
+                            InitialWindowMode::DetachedTab {
+                                tab: detached_tab,
+                                size: src_size,
+                            },
+                        );
+                        if let Ok(st) = new_win.try_borrow() {
+                            st.window.present();
+                        };
+                    });
+                }
+            }
         }
         "close_tab" => {
             if let Some(id) = msg.id {
@@ -2049,7 +2213,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                     state.bookmarks.toggle(&url, &title);
                     state.bookmarks.save();
                 }
-                sync_bookmarks_to_ui(state_rc);
+                broadcast_bookmarks_from_disk();
             }
         }
         "restore_session" => {
@@ -2202,7 +2366,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                         state.bookmarks.toggle(&url, &title);
                     }
                 }
-                sync_bookmarks_to_ui(state_rc);
+                broadcast_bookmarks_from_disk();
             }
         }
         "translate" => {
@@ -2242,37 +2406,19 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "toggle_adblock" => {
-            let info = {
-                if let Ok(mut state) = state_rc.try_borrow_mut() {
-                    let enabled = state.adblocker.toggle_enabled();
-                    state.settings.adblock_enabled = enabled;
-                    let _ = state.settings.save();
-                    let ucms: Vec<_> = state.tabs.iter().filter_map(|t| t.inner.user_content_manager()).collect();
-                    Some((enabled, state.native_filter.clone(), ucms))
-                } else {
-                    None
-                }
-            };
-
-            if let Some((is_enabled, filter, tabs_ucm)) = info {
-                for ucm in tabs_ucm {
-                    if let Some(filter) = &filter {
-                        if is_enabled {
-                            attach_to_ucm(&ucm, filter);
-                        } else {
-                            detach_from_ucm(&ucm, filter);
-                        }
-                    }
-                }
+            if let Ok(mut state) = state_rc.try_borrow_mut() {
+                let enabled = state.adblocker.toggle_enabled();
+                state.settings.adblock_enabled = enabled;
+                let _ = state.settings.save();
             }
-            sync_settings_to_ui(state_rc);
+            broadcast_settings_from_disk();
         }
         "toggle_bookmarks_bar" => {
             if let Ok(mut state) = state_rc.try_borrow_mut() {
                 state.settings.show_bookmarks_bar = !state.settings.show_bookmarks_bar;
                 let _ = state.settings.save();
             }
-            sync_settings_to_ui(state_rc);
+            broadcast_settings_from_disk();
         }
         "zoom_step" => {
             let step_up = msg.id.unwrap_or(1) == 1;
@@ -2926,7 +3072,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 state.settings.theme_mode = next_mode;
                 let _ = state.settings.save();
             }
-            sync_settings_to_ui(state_rc);
+            broadcast_settings_from_disk();
         }
         "edit_cmd" => {
             let inner = {
@@ -3072,16 +3218,16 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                 let state_weak = Rc::downgrade(state_rc);
                 glib::idle_add_local_once(move || {
                     if let Some(state_rc) = state_weak.upgrade() {
-                        let (is_pinned, is_muted, is_active) = state_rc
+                        let (is_pinned, is_muted, is_active, tabs_len) = state_rc
                             .try_borrow()
                             .ok()
                             .and_then(|st| {
                                 st.tabs
                                     .iter()
                                     .find(|t| t.id == tab_id)
-                                    .map(|t| (t.is_pinned, t.is_muted, st.active_tab_id == Some(tab_id)))
+                                    .map(|t| (t.is_pinned, t.is_muted, st.active_tab_id == Some(tab_id), st.tabs.len()))
                             })
-                            .unwrap_or((false, false, false));
+                            .unwrap_or((false, false, false, 1));
 
                         let mut entries: Vec<PopoverEntry> = Vec::new();
 
@@ -3111,6 +3257,22 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                             entries.push(PopoverEntry::Item(
                                 "Дублировать вкладку".to_string(),
                                 Box::new(move || { create_tab(&s_rc, &dup_url); }),
+                            ));
+                        }
+                        if tabs_len > 1 {
+                            let s_rc = state_rc.clone();
+                            entries.push(PopoverEntry::Item(
+                                "Переместить вкладку в новое окно".to_string(),
+                                Box::new(move || {
+                                    handle_ipc(&s_rc, IpcMessage {
+                                        action: "detach_tab_to_window".to_string(),
+                                        url: None,
+                                        id: Some(tab_id),
+                                        title: None,
+                                        pass: None,
+                                        settings: None,
+                                    });
+                                }),
                             ));
                         }
                         {
@@ -3270,7 +3432,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
                                     if let Ok(mut state) = s_rc.try_borrow_mut() {
                                         state.bookmarks.toggle(&u3, &t3);
                                     }
-                                    sync_bookmarks_to_ui(&s_rc);
+                                    broadcast_bookmarks_from_disk();
                                 }),
                             ));
                         }
@@ -3395,6 +3557,7 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
 
                     let entries = vec![
                         tab_item("Новая вкладка                   Ctrl+T", "ferro://newtab"),
+                        ipc_item("Новое окно                         Ctrl+N", "new_window"),
                         ipc_item("Восстановить вкладку   Ctrl+Shift+T", "reopen_closed_tab"),
                         PopoverEntry::Separator,
                         tab_item("История просмотров         Ctrl+H", "ferro://history"),
@@ -3464,7 +3627,9 @@ fn handle_ipc(state_rc: &Rc<RefCell<BrowserState>>, msg: IpcMessage) {
             }
         }
         "window_close" => {
-            save_current_session(state_rc);
+            if open_windows_count() <= 1 {
+                save_current_session(state_rc);
+            }
             if let Ok(state) = state_rc.try_borrow() {
                 state.window.close();
             }
@@ -3563,31 +3728,30 @@ fn ensure_single_instance() -> Option<std::os::unix::net::UnixListener> {
     }
 }
 
-fn main() {
-    let single_instance = ensure_single_instance();
-    if single_instance.is_none() {
-        return;
-    }
-
-    // Ensure GStreamer uses GL-compatible video decoders & sink in GTK3 WebKitGTK on Wayland
-    // (fixes invisible/stalled <video> on dual Intel+NVIDIA DRM render nodes!)
-    if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
-        std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
-    }
-    if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
-        std::env::set_var(
-            "GST_PLUGIN_FEATURE_RANK",
-            "av1dec:NONE,vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
-        );
-    }
-
-    gtk::init().expect("Не удалось инициализировать GTK");
-
+fn spawn_browser_window(
+    core: &SharedBrowserCore,
+    initial: InitialWindowMode,
+) -> Rc<RefCell<BrowserState>> {
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Ferro");
-    window.set_default_size(1180, 780);
-    window.set_decorated(false); // Obsidian / Chrome borderless 0px geometry
-    window.set_position(gtk::WindowPosition::Center);
+    let (def_w, def_h) = match &initial {
+        InitialWindowMode::DetachedTab { size: (w, h), .. } => ((*w).max(640), (*h).max(480)),
+        _ => (1180, 780),
+    };
+    window.set_default_size(def_w, def_h);
+    window.set_decorated(false);
+    if matches!(&initial, InitialWindowMode::DetachedTab { .. }) {
+        if let Some(display) = gdk::Display::default() {
+            if let Some(seat) = display.default_seat() {
+                if let Some(pointer) = seat.pointer() {
+                    let (_, px, py) = pointer.position();
+                    window.move_((px - 120).max(0), (py - 18).max(0));
+                }
+            }
+        }
+    } else {
+        window.set_position(gtk::WindowPosition::Center);
+    }
 
     if let Some(screen) = gdk::Screen::default() {
         if let Some(visual) = screen.rgba_visual() {
@@ -3595,26 +3759,6 @@ fn main() {
         }
     }
     window.set_app_paintable(true);
-
-    if let Some(listener) = single_instance {
-        let win_clone = window.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                use std::io::Read;
-                let mut buf = [0u8; 64];
-                if let Ok(n) = stream.read(&mut buf) {
-                    let msg = String::from_utf8_lossy(&buf[..n]);
-                    if msg.contains("QUIT") {
-                        win_clone.close();
-                    } else if msg.contains("FOCUS") {
-                        win_clone.deiconify();
-                        win_clone.present();
-                    }
-                }
-            }
-            glib::ControlFlow::Continue
-        });
-    }
 
     const LOGO_PNG: &[u8] = include_bytes!("ui/logo.png");
     if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(LOGO_PNG)) {
@@ -3628,9 +3772,8 @@ fn main() {
     let bookmarks = BookmarksData::load_or_default();
     let history = HistoryData::load_or_default();
     let passwords = PasswordsData::load_or_default();
-    let adblocker = AdBlocker::new();
     let settings = BrowserSettings::load_or_default();
-    adblocker.set_enabled(settings.adblock_enabled);
+    core.adblocker.set_enabled(settings.adblock_enabled);
     let initial_top_h = if settings.show_bookmarks_bar { 102 } else { 74 };
     top_box.set_size_request(-1, initial_top_h);
     vbox.pack_start(&top_box, false, false, 0);
@@ -3645,174 +3788,50 @@ fn main() {
     vbox.pack_start(&hpaned, true, true, 0);
 
     let theme_mode = settings.theme_mode.clone();
-
-    let profile_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("ferro")
-        .join("profile");
-    let _ = std::fs::create_dir_all(&profile_dir);
-    clean_stale_profile_locks(&profile_dir);
-    let web_context = wry::WebContext::new(Some(profile_dir));
-
-    let css_provider = gtk::CssProvider::new();
-    update_gtk_menu_css(&css_provider, &settings);
-    gtk::StyleContext::add_provider_for_screen(
-        &gdk::Screen::default().expect("Error initializing screen"),
-        &css_provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
-
-    let settings_dirty = Arc::new(AtomicBool::new(false));
-    let bookmarks_dirty = Arc::new(AtomicBool::new(false));
-    let history_dirty = Arc::new(AtomicBool::new(false));
-    let passwords_dirty = Arc::new(AtomicBool::new(false));
-    let downloads = Arc::new(Mutex::new(DownloadsData::load_or_default()));
-    let lens_preview = Arc::new(Mutex::new(String::new()));
-    let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
     let initial_settings_json = serde_json::to_string(&settings).unwrap_or_else(|_| "{}".to_string());
     let initial_surface_rgba = compute_surface_rgba(&settings);
 
     let state = Rc::new(RefCell::new(BrowserState {
+        core: core.clone(),
         window: window.clone(),
         top_box: top_box.clone(),
         hpaned,
-        stack,
+        stack: stack.clone(),
         side_box: side_box.clone(),
         side_header_webview: None,
         side_webview: None,
         side_panel_open: false,
-        lens_preview,
+        lens_preview: core.lens_preview.clone(),
         last_lens_result_url: None,
         spare_tab: None,
         active_popover: None,
         pip_window: None,
         win_fullscreen: false,
-        css_provider,
+        css_provider: core.css_provider.clone(),
         top_webview: None,
         tabs: Vec::new(),
         closed_tabs: Vec::new(),
         active_tab_id: None,
-        next_tab_id: 1,
         bookmarks,
         history,
         passwords,
-        downloads,
+        downloads: core.downloads.clone(),
+        pending_password: None,
         settings,
-        web_context,
-        adblocker,
-        native_filter: None,
+        web_context: core.web_context.clone(),
+        adblocker: core.adblocker.clone(),
+        native_filter: core.native_filter.clone(),
         dark_mode: false,
         theme: theme_mode,
-        download_handler_attached: false,
-        pending_password: None,
-        settings_dirty: settings_dirty.clone(),
-        bookmarks_dirty: bookmarks_dirty.clone(),
-        history_dirty: history_dirty.clone(),
-        passwords_dirty: passwords_dirty.clone(),
-        page_source_cache,
+        download_handler_attached: core.download_handler_attached.clone(),
+        settings_dirty: core.settings_dirty.clone(),
+        bookmarks_dirty: core.bookmarks_dirty.clone(),
+        history_dirty: core.history_dirty.clone(),
+        passwords_dirty: core.passwords_dirty.clone(),
+        page_source_cache: core.page_source_cache.clone(),
     }));
 
-    // Background watcher for settings/bookmarks/history/passwords saved via ferro://api/* custom protocol
-    let state_for_watcher = state.clone();
-    glib::timeout_add_local(std::time::Duration::from_millis(180), move || {
-        if settings_dirty.swap(false, Ordering::SeqCst) {
-            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
-                let loaded = BrowserSettings::load_or_default();
-                st.theme = loaded.theme_mode.clone();
-                st.settings = loaded;
-            }
-            sync_settings_to_ui(&state_for_watcher);
-        }
-        if bookmarks_dirty.swap(false, Ordering::SeqCst) {
-            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
-                st.bookmarks = BookmarksData::load_or_default();
-            }
-            sync_bookmarks_to_ui(&state_for_watcher);
-        }
-        if history_dirty.swap(false, Ordering::SeqCst) {
-            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
-                st.history = HistoryData::load_or_default();
-            }
-        }
-        if passwords_dirty.swap(false, Ordering::SeqCst) {
-            if let Ok(mut st) = state_for_watcher.try_borrow_mut() {
-                st.passwords = PasswordsData::load_or_default();
-            }
-        }
-        glib::ControlFlow::Continue
-    });
-
-    // Fast-path cached WebKit filter load; background compilation ONLY when cache is missing/outdated!
-    let store_dir = AdBlocker::filter_store_dir();
-    let store_dir_str = store_dir.to_string_lossy().to_string();
-    let stamp_path = store_dir.join("rules.stamp");
-    const FILTER_STAMP: &str = "ferro-webkit-rules-v4";
-    let stamp_ok = std::fs::read_to_string(&stamp_path)
-        .map(|s| s.trim() == FILTER_STAMP)
-        .unwrap_or(false);
-
-    let state_for_load = state.clone();
-    let store_dir_for_load = store_dir_str.clone();
-    let stamp_path_clone = stamp_path.clone();
-    load_filter(&store_dir_str, "ferro_adblock", move |filter_opt| {
-        if stamp_ok {
-            if let Some(filter) = filter_opt {
-                println!("[Ferro AdBlock] Cached native WebKit filter attached immediately!");
-                glib::idle_add_local_once(move || {
-                    if let Ok(mut st) = state_for_load.try_borrow_mut() {
-                        if st.adblocker.is_enabled() {
-                            for tab in &st.tabs {
-                                if let Some(ucm) = tab.inner.user_content_manager() {
-                                    attach_to_ucm(&ucm, &filter);
-                                }
-                            }
-                        }
-                        st.native_filter = Some(filter);
-                    }
-                });
-                return;
-            }
-        }
-
-        // Compile rules JSON on a background worker thread so GTK UI startup is never blocked
-        let state_weak = Rc::downgrade(&state_for_load);
-        let store_dir_bg = store_dir_for_load.clone();
-        let stamp_bg = stamp_path_clone.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-        std::thread::spawn(move || {
-            let compiled = AdBlocker::compile_webkit_rules_json();
-            let _ = tx.send(compiled);
-        });
-        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
-            match rx.try_recv() {
-                Ok(rules_json) => {
-                    let state_weak_inner = state_weak.clone();
-                    let stamp_done = stamp_bg.clone();
-                    save_filter(&store_dir_bg, "ferro_adblock", &rules_json, move |filter| {
-                        let _ = std::fs::write(&stamp_done, FILTER_STAMP);
-                        println!("[Ferro AdBlock] Background WebKit uBlock filter compiled and cached!");
-                        if let Some(state_rc) = state_weak_inner.upgrade() {
-                            glib::idle_add_local_once(move || {
-                                if let Ok(mut st) = state_rc.try_borrow_mut() {
-                                    if st.adblocker.is_enabled() {
-                                        for tab in &st.tabs {
-                                            if let Some(ucm) = tab.inner.user_content_manager() {
-                                                attach_to_ucm(&ucm, &filter);
-                                            }
-                                        }
-                                    }
-                                    st.native_filter = Some(filter);
-                                }
-                            });
-                        }
-                    });
-                    glib::ControlFlow::Break
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
-            }
-        });
-    });
+    ALL_WINDOWS.with(|wins| wins.borrow_mut().push(state.clone()));
 
     // Setup Top UI WebView
     let state_for_ipc = state.clone();
@@ -3842,26 +3861,50 @@ fn main() {
 
     state.borrow_mut().top_webview = Some(top_webview);
 
-    // Initial tab or session restore
-    let restore_mode = state.borrow().settings.restore_session_mode.clone();
-    if restore_mode == "always" {
-        if let Some(session) = SessionData::load() {
-            for tab in session.tabs {
-                create_tab(&state, &tab.url);
+    let mut detached_focus_inner: Option<webkit2gtk::WebView> = None;
+    match initial {
+        InitialWindowMode::Startup => {
+            let restore_mode = state.borrow().settings.restore_session_mode.clone();
+            if restore_mode == "always" {
+                if let Some(session) = SessionData::load() {
+                    for tab in session.tabs {
+                        create_tab(&state, &tab.url);
+                    }
+                    SessionData::clear();
+                } else {
+                    create_tab(&state, "ferro://newtab");
+                }
+            } else {
+                create_tab(&state, "ferro://newtab");
             }
-            SessionData::clear();
-        } else {
+        }
+        InitialWindowMode::NewBlankWindow => {
             create_tab(&state, "ferro://newtab");
         }
-    } else {
-        create_tab(&state, "ferro://newtab");
+        InitialWindowMode::DetachedTab { tab, .. } => {
+            let tab_id = tab.id;
+            let tab_name = format!("tab_{}", tab_id);
+            *tab.owner.borrow_mut() = Rc::downgrade(&state);
+            tab.inner.set_background_color(&initial_surface_rgba);
+            stack.add_named(&tab.container, &tab_name);
+            tab.container.show_all();
+            stack.set_visible_child_name(&tab_name);
+            detached_focus_inner = Some(tab.inner.clone());
+            if let Ok(mut st) = state.try_borrow_mut() {
+                st.tabs.push(tab);
+                st.active_tab_id = Some(tab_id);
+            }
+            sync_tabs_to_ui(&state);
+        }
     }
     schedule_prewarm_tab(&state);
 
-    // Save session on window close
+    // Save session when closing the last remaining window
     let state_for_delete = state.clone();
     window.connect_delete_event(move |_win, _event| {
-        save_current_session(&state_for_delete);
+        if open_windows_count() <= 1 {
+            save_current_session(&state_for_delete);
+        }
         glib::Propagation::Proceed
     });
 
@@ -3901,6 +3944,16 @@ fn main() {
         if ctrl {
             if (key == gdk::keys::constants::t || key == gdk::keys::constants::T || key == gdk::keys::constants::Cyrillic_ie || key == gdk::keys::constants::Cyrillic_IE) && !shift {
                 create_tab(&state_for_keys, "ferro://newtab");
+                return glib::Propagation::Stop;
+            } else if (key == gdk::keys::constants::n || key == gdk::keys::constants::N || key == gdk::keys::constants::Cyrillic_te || key == gdk::keys::constants::Cyrillic_TE) && !shift {
+                handle_ipc(&state_for_keys, IpcMessage {
+                    action: "new_window".to_string(),
+                    url: None,
+                    id: None,
+                    title: None,
+                    pass: None,
+                    settings: None,
+                });
                 return glib::Propagation::Stop;
             } else if key == gdk::keys::constants::w || key == gdk::keys::constants::W || key == gdk::keys::constants::Cyrillic_tse || key == gdk::keys::constants::Cyrillic_TSE {
                 let active_id = state_for_keys.try_borrow().ok().and_then(|s| s.active_tab_id);
@@ -4106,11 +4159,238 @@ fn main() {
         glib::Propagation::Proceed
     });
 
-    window.connect_destroy(|_| {
-        gtk::main_quit();
+    let state_for_destroy = state.clone();
+    window.connect_destroy(move |_| {
+        if let Ok(mut st) = state_for_destroy.try_borrow_mut() {
+            if let Some((pip_win, _, _)) = st.pip_window.take() {
+                pip_win.close();
+            }
+            st.active_popover = None;
+            st.spare_tab = None;
+            st.tabs.clear();
+            st.top_webview = None;
+            st.side_header_webview = None;
+            st.side_webview = None;
+        }
+        let remaining = ALL_WINDOWS.with(|wins| {
+            let mut list = wins.borrow_mut();
+            list.retain(|w| !Rc::ptr_eq(w, &state_for_destroy));
+            list.len()
+        });
+        if remaining == 0 {
+            gtk::main_quit();
+        }
     });
 
     window.show_all();
     side_box.hide();
+    if let Some(inner) = detached_focus_inner {
+        inner.grab_focus();
+        inner.queue_draw();
+    }
+
+    state
+}
+
+fn main() {
+    let single_instance = ensure_single_instance();
+    if single_instance.is_none() {
+        return;
+    }
+
+    // Ensure GStreamer uses GL-compatible video decoders & sink in GTK3 WebKitGTK on Wayland
+    // (fixes invisible/stalled <video> on dual Intel+NVIDIA DRM render nodes!)
+    if std::env::var_os("WEBKIT_GST_DMABUF_SINK_DISABLED").is_none() {
+        std::env::set_var("WEBKIT_GST_DMABUF_SINK_DISABLED", "1");
+    }
+    if std::env::var_os("GST_PLUGIN_FEATURE_RANK").is_none() {
+        std::env::set_var(
+            "GST_PLUGIN_FEATURE_RANK",
+            "av1dec:NONE,vah264dec:NONE,vavp9dec:NONE,vavp8dec:NONE,vaav1dec:NONE",
+        );
+    }
+
+    gtk::init().expect("Не удалось инициализировать GTK");
+
+    let initial_settings = BrowserSettings::load_or_default();
+    let adblocker = AdBlocker::new();
+    adblocker.set_enabled(initial_settings.adblock_enabled);
+
+    let profile_dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("ferro")
+        .join("profile");
+    let _ = std::fs::create_dir_all(&profile_dir);
+    clean_stale_profile_locks(&profile_dir);
+    let web_context = Rc::new(RefCell::new(wry::WebContext::new(Some(profile_dir))));
+
+    let css_provider = gtk::CssProvider::new();
+    update_gtk_menu_css(&css_provider, &initial_settings);
+    gtk::StyleContext::add_provider_for_screen(
+        &gdk::Screen::default().expect("Error initializing screen"),
+        &css_provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    let settings_dirty = Arc::new(AtomicBool::new(false));
+    let bookmarks_dirty = Arc::new(AtomicBool::new(false));
+    let history_dirty = Arc::new(AtomicBool::new(false));
+    let passwords_dirty = Arc::new(AtomicBool::new(false));
+    let downloads = Arc::new(Mutex::new(DownloadsData::load_or_default()));
+    let lens_preview = Arc::new(Mutex::new(String::new()));
+    let page_source_cache = Arc::new(Mutex::new((String::new(), String::new())));
+    let native_filter: Rc<RefCell<Option<WebKitFilter>>> = Rc::new(RefCell::new(None));
+
+    let core = SharedBrowserCore {
+        web_context,
+        adblocker,
+        native_filter: native_filter.clone(),
+        css_provider,
+        downloads,
+        lens_preview,
+        page_source_cache,
+        settings_dirty: settings_dirty.clone(),
+        bookmarks_dirty: bookmarks_dirty.clone(),
+        history_dirty: history_dirty.clone(),
+        passwords_dirty: passwords_dirty.clone(),
+        download_handler_attached: Rc::new(Cell::new(false)),
+    };
+
+    if let Some(listener) = single_instance {
+        glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::Read;
+                let mut buf = [0u8; 64];
+                if let Ok(n) = stream.read(&mut buf) {
+                    let msg = String::from_utf8_lossy(&buf[..n]);
+                    if msg.contains("QUIT") {
+                        let wins = open_windows_snapshot();
+                        if let Some(first) = wins.first() {
+                            save_current_session(first);
+                        }
+                        for w in wins {
+                            if let Ok(st) = w.try_borrow() {
+                                st.window.close();
+                            }
+                        }
+                    } else if msg.contains("FOCUS") {
+                        let wins = open_windows_snapshot();
+                        if let Some(last) = wins.last() {
+                            if let Ok(st) = last.try_borrow() {
+                                st.window.deiconify();
+                                st.window.present();
+                            }
+                        }
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    // Background watcher for settings/bookmarks/history/passwords saved via ferro://api/* custom protocol
+    glib::timeout_add_local(std::time::Duration::from_millis(180), move || {
+        if settings_dirty.swap(false, Ordering::SeqCst) {
+            broadcast_settings_from_disk();
+        }
+        if bookmarks_dirty.swap(false, Ordering::SeqCst) {
+            broadcast_bookmarks_from_disk();
+        }
+        if history_dirty.swap(false, Ordering::SeqCst) {
+            let loaded = HistoryData::load_or_default();
+            for win_rc in open_windows_snapshot() {
+                if let Ok(mut st) = win_rc.try_borrow_mut() {
+                    st.history = loaded.clone();
+                }
+            }
+        }
+        if passwords_dirty.swap(false, Ordering::SeqCst) {
+            let loaded = PasswordsData::load_or_default();
+            for win_rc in open_windows_snapshot() {
+                if let Ok(mut st) = win_rc.try_borrow_mut() {
+                    st.passwords = loaded.clone();
+                }
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // Fast-path cached WebKit filter load; background compilation ONLY when cache is missing/outdated!
+    let store_dir = AdBlocker::filter_store_dir();
+    let store_dir_str = store_dir.to_string_lossy().to_string();
+    let stamp_path = store_dir.join("rules.stamp");
+    const FILTER_STAMP: &str = "ferro-webkit-rules-v4";
+    let stamp_ok = std::fs::read_to_string(&stamp_path)
+        .map(|s| s.trim() == FILTER_STAMP)
+        .unwrap_or(false);
+
+    let filter_slot = native_filter;
+    let store_dir_for_load = store_dir_str.clone();
+    let stamp_path_clone = stamp_path.clone();
+    load_filter(&store_dir_str, "ferro_adblock", move |filter_opt| {
+        if stamp_ok {
+            if let Some(filter) = filter_opt {
+                println!("[Ferro AdBlock] Cached native WebKit filter attached immediately!");
+                let filter_slot_ok = filter_slot.clone();
+                glib::idle_add_local_once(move || {
+                    *filter_slot_ok.borrow_mut() = Some(filter.clone());
+                    for win_rc in open_windows_snapshot() {
+                        if let Ok(st) = win_rc.try_borrow() {
+                            if st.adblocker.is_enabled() {
+                                for tab in &st.tabs {
+                                    if let Some(ucm) = tab.inner.user_content_manager() {
+                                        attach_to_ucm(&ucm, &filter);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+                return;
+            }
+        }
+
+        // Compile rules JSON on a background worker thread so GTK UI startup is never blocked
+        let filter_slot_bg = filter_slot.clone();
+        let store_dir_bg = store_dir_for_load.clone();
+        let stamp_bg = stamp_path_clone.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let compiled = AdBlocker::compile_webkit_rules_json();
+            let _ = tx.send(compiled);
+        });
+        glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+            match rx.try_recv() {
+                Ok(rules_json) => {
+                    let filter_slot_done = filter_slot_bg.clone();
+                    let stamp_done = stamp_bg.clone();
+                    save_filter(&store_dir_bg, "ferro_adblock", &rules_json, move |filter| {
+                        let _ = std::fs::write(&stamp_done, FILTER_STAMP);
+                        println!("[Ferro AdBlock] Background WebKit uBlock filter compiled and cached!");
+                        let filter_slot_apply = filter_slot_done.clone();
+                        glib::idle_add_local_once(move || {
+                            *filter_slot_apply.borrow_mut() = Some(filter.clone());
+                            for win_rc in open_windows_snapshot() {
+                                if let Ok(st) = win_rc.try_borrow() {
+                                    if st.adblocker.is_enabled() {
+                                        for tab in &st.tabs {
+                                            if let Some(ucm) = tab.inner.user_content_manager() {
+                                                attach_to_ucm(&ucm, &filter);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
+    });
+
+    spawn_browser_window(&core, InitialWindowMode::Startup);
     gtk::main();
 }
