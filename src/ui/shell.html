@@ -179,14 +179,8 @@
       cursor: grabbing;
       background: var(--bg-toolbar);
       color: var(--text-primary);
-      box-shadow: 0 8px 22px rgba(0, 0, 0, 0.48);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.42);
       transition: background 120ms ease, box-shadow 120ms ease !important;
-    }
-
-    .tab.tear-ready {
-      outline: 1.5px solid var(--accent-color);
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.62) !important;
-      opacity: 0.92 !important;
     }
 
     .tab.tab-closing {
@@ -1240,6 +1234,48 @@
             }
           };
 
+          const animateTearOffGapClose = () => {
+            const newTabBtnEl = document.getElementById('newTabBtn');
+            const remainingNodes = Array.from(tabsContainer.querySelectorAll('.tab')).filter(n => n !== el);
+            const prevLefts = new Map();
+            remainingNodes.forEach(n => prevLefts.set(n, n.getBoundingClientRect().left));
+            if (newTabBtnEl) prevLefts.set(newTabBtnEl, newTabBtnEl.getBoundingClientRect().left);
+
+            const removedIdx = state.tabs.findIndex(t => t.id === tab.id);
+            if (removedIdx !== -1) {
+              state.tabs.splice(removedIdx, 1);
+              if (state.activeTabId === tab.id && state.tabs.length > 0) {
+                const nextIdx = removedIdx > 0 ? removedIdx - 1 : 0;
+                state.activeTabId = state.tabs[nextIdx].id;
+              }
+            }
+            el.remove();
+            remainingNodes.forEach(n => {
+              n.classList.toggle('active', Number(n.dataset.tabId) === state.activeTabId);
+            });
+            updateTabCompactClasses();
+            syncActiveToolbarState();
+
+            const targets = newTabBtnEl ? [...remainingNodes, newTabBtnEl] : remainingNodes;
+            targets.forEach(node => {
+              const oldL = prevLefts.get(node);
+              const newL = node.getBoundingClientRect().left;
+              const delta = oldL - newL;
+              if (Math.abs(delta) > 0.5) {
+                node.style.transition = 'none';
+                node.style.transform = `translate3d(${delta}px, 0, 0)`;
+                requestAnimationFrame(() => {
+                  node.style.transition = 'transform 180ms cubic-bezier(0.2, 0, 0, 1)';
+                  node.style.transform = 'translate3d(0, 0, 0)';
+                  setTimeout(() => {
+                    node.style.transition = '';
+                    node.style.transform = '';
+                  }, 190);
+                });
+              }
+            });
+          };
+
           el.addEventListener('pointerdown', (e) => {
             if (e.button !== 0 || e.target.closest('.tab-close') || e.target.closest('.tab-mute-btn')) return;
             pointerDown = true;
@@ -1247,59 +1283,61 @@
             activePointerId = e.pointerId;
             dragOriginX = e.clientX;
             dragOriginY = e.clientY;
+            sendIpc({ action: 'snapshot_tab_state', id: tab.id });
+            if (state.activeTabId !== tab.id) {
+              state.activeTabId = tab.id;
+              Array.from(tabsContainer.querySelectorAll('.tab')).forEach(node => {
+                node.classList.toggle('active', Number(node.dataset.tabId) === tab.id);
+              });
+              syncActiveToolbarState();
+              sendIpc({ action: 'switch_tab', id: tab.id });
+            }
           });
 
           el.addEventListener('pointermove', (e) => {
             if (!pointerDown || e.pointerId !== activePointerId) return;
             const rawDx = e.clientX - dragOriginX;
             const rawDy = e.clientY - dragOriginY;
+
+            // Single-tab window: dragging the sole tab in ANY direction moves the window (1:1 Chrome behavior)
+            if (state.tabs.length <= 1 && !tab.isPinned) {
+              if (Math.hypot(rawDx, rawDy) >= 5) {
+                pointerDown = false;
+                try { el.releasePointerCapture(activePointerId); } catch (_) {}
+                activePointerId = null;
+                el.classList.remove('dragging');
+                el.style.transform = '';
+                el.style.transition = '';
+                setTimeout(() => { dragMoved = false; }, 30);
+                sendIpc({ action: 'window_drag' });
+              }
+              return;
+            }
+
             if (!dragMoved) {
-              if (Math.hypot(rawDx, rawDy) < 5) return;
+              if (Math.hypot(rawDx, rawDy) < 4) return;
               if (tab.isPinned && Math.abs(rawDy) < 6) return;
               dragMoved = true;
               try { el.setPointerCapture(e.pointerId); } catch (_) {}
               el.classList.add('dragging');
-              if (state.activeTabId !== tab.id) {
-                sendIpc({ action: 'switch_tab', id: tab.id });
-              }
             }
 
-            // Single-tab window: pulling the sole tab moves the window (Chrome behavior)
-            if (state.tabs.length <= 1 && Math.abs(rawDy) > 26) {
-              pointerDown = false;
-              try { el.releasePointerCapture(activePointerId); } catch (_) {}
-              activePointerId = null;
-              el.classList.remove('dragging', 'tear-ready');
-              el.style.transform = '';
-              el.style.transition = '';
-              setTimeout(() => { dragMoved = false; }, 30);
-              sendIpc({ action: 'window_drag' });
-              return;
-            }
-
-            // Multi-tab window: tear off tab into its own standalone window when pulled out of tab strip
+            // Multi-tab window: tear off tab into its own window when pulled outside the magnetic tab strip
             if (state.tabs.length > 1) {
-              const outHorizontal = e.clientX < -52 || e.clientX > window.innerWidth + 52;
-              const outVertical = rawDy > 38 || rawDy < -32;
-              if (outVertical || outHorizontal) {
+              const outBottom = e.clientY > 50;
+              const outTop = e.clientY < -18;
+              const outSides = e.clientX < -44 || e.clientX > window.innerWidth + 44;
+              if (outBottom || outTop || outSides) {
                 pointerDown = false;
                 try { el.releasePointerCapture(activePointerId); } catch (_) {}
                 activePointerId = null;
-                el.classList.remove('dragging', 'tear-ready');
+                el.classList.remove('dragging');
                 el.style.transform = '';
                 el.style.transition = '';
                 commitCurrentDomOrder();
+                animateTearOffGapClose();
                 setTimeout(() => { dragMoved = false; }, 30);
-                sendIpc({ action: 'detach_tab_to_window', id: tab.id });
-                return;
-              }
-
-              const nearTear = Math.abs(rawDy) > 14 || e.clientX < -20 || e.clientX > window.innerWidth + 20;
-              el.classList.toggle('tear-ready', nearTear);
-              if (nearTear) {
-                const clampedDy = Math.max(-16, Math.min(26, rawDy));
-                const previewDx = tab.isPinned ? 0 : rawDx;
-                el.style.transform = `translate3d(${previewDx}px, ${clampedDy}px, 0) scale(0.95)`;
+                sendIpc({ action: 'detach_tab_to_window', id: tab.id, pass: 'drag' });
                 return;
               }
             }
@@ -1309,8 +1347,9 @@
               return;
             }
 
+            // Strictly horizontal Chrome rail inside the tab strip (no vertical wobble)
             const dx = e.clientX - dragOriginX;
-            el.style.transform = `translate3d(${dx}px, 0, 0) scale(1.02)`;
+            el.style.transform = `translate3d(${dx}px, 0, 0)`;
 
             const myRect = el.getBoundingClientRect();
             const myCenter = myRect.left + myRect.width / 2;
@@ -1339,7 +1378,7 @@
                 const afterMyLayoutLeft = el.offsetLeft;
                 dragOriginX += (afterMyLayoutLeft - beforeMyLayoutLeft);
                 const adjustedDx = e.clientX - dragOriginX;
-                el.style.transform = `translate3d(${adjustedDx}px, 0, 0) scale(1.02)`;
+                el.style.transform = `translate3d(${adjustedDx}px, 0, 0)`;
 
                 // FLIP animate displaced sibling tabs smoothly
                 siblings.forEach(s => {
@@ -1351,7 +1390,7 @@
                     s.style.transition = 'none';
                     s.style.transform = `translate3d(${delta}px, 0, 0)`;
                     requestAnimationFrame(() => {
-                      s.style.transition = 'transform 180ms cubic-bezier(0.23, 1, 0.32, 1)';
+                      s.style.transition = 'transform 180ms cubic-bezier(0.2, 0, 0, 1)';
                       s.style.transform = 'translate3d(0, 0, 0)';
                     });
                   }
@@ -1368,8 +1407,8 @@
             activePointerId = null;
 
             if (dragMoved) {
-              el.classList.remove('dragging', 'tear-ready');
-              el.style.transition = 'transform 170ms cubic-bezier(0.23, 1, 0.32, 1)';
+              el.classList.remove('dragging');
+              el.style.transition = 'transform 170ms cubic-bezier(0.2, 0, 0, 1)';
               el.style.transform = 'translate3d(0, 0, 0)';
               setTimeout(() => { el.style.transform = ''; el.style.transition = ''; }, 180);
 
@@ -1394,7 +1433,7 @@
           } else if (e.target.closest('.tab-mute-btn')) {
             e.stopPropagation();
             sendIpc({ action: 'toggle_mute_tab', id: tab.id });
-          } else {
+          } else if (state.activeTabId !== tab.id) {
             sendIpc({ action: 'switch_tab', id: tab.id });
           }
         });
@@ -1600,9 +1639,41 @@
           const newest = tabs[tabs.length - 1];
           if (newest) state.newTabId = newest.id;
         }
+        const domNodes = Array.from(tabsContainer.querySelectorAll('.tab'));
+        const domSig = domNodes
+          .map(n => `${n.dataset.tabId}:${n.classList.contains('pinned') ? 1 : 0}:${n.querySelector('.tab-mute-btn') ? 1 : 0}`)
+          .join(',');
+        const nextSig = tabs
+          .map(t => `${t.id}:${t.isPinned ? 1 : 0}:${t.isMuted ? 1 : 0}`)
+          .join(',');
+
         state.tabs = tabs;
         state.activeTabId = activeId;
-        render();
+
+        if (domNodes.length > 0 && domSig === nextSig) {
+          // Surgical in-place sync: preserves active pointer-capture drag & FLIP animations!
+          domNodes.forEach((node, idx) => {
+            const t = tabs[idx];
+            node.classList.toggle('active', t.id === activeId);
+            node.classList.toggle('sleeping', Boolean(t.isSleeping));
+            const titleText = t.title || (t.url === 'ferro://newtab' ? 'Новая вкладка' : (t.url || 'Новая вкладка'));
+            node.title = titleText;
+            const titleEl = node.querySelector('.tab-title');
+            if (titleEl && titleEl.textContent !== titleText) {
+              titleEl.textContent = titleText;
+            }
+            const nextHost = getHostKey(t.url);
+            if (node.dataset.hostKey !== nextHost) {
+              node.dataset.hostKey = nextHost;
+              const favEl = node.querySelector('.tab-favicon');
+              if (favEl) favEl.innerHTML = getSiteIconHtml(t.url, t.title);
+            }
+          });
+          updateTabCompactClasses();
+          syncActiveToolbarState();
+        } else {
+          render();
+        }
       },
 
       onTabCreated(id, url, title) {
