@@ -1018,17 +1018,17 @@
       }
     });
 
-    // Seamless radial continuum with top panel (`at X% 0%` matches `at X% 100%` of shell.html 1:1!)
+    // Top edge at 0% matches the solid single-tone top panel in shell.html 1:1 so there is zero boundary seam!
     function getWallpaperGradients(alpha) {
       return {
-        obsidian: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
-        carbon: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
-        forest: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
-        aurora: `radial-gradient(ellipse 95% 82% at 35% 0%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
-        sunset: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(154, 52, 18, ${alpha}) 0%, rgba(88, 28, 135, ${alpha}) 48%, rgba(31, 18, 53, ${alpha}) 100%)`,
-        cyberpunk: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
-        neon: `radial-gradient(ellipse 95% 82% at 50% 0%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
-        nebula: `radial-gradient(ellipse 95% 82% at 65% 0%, rgba(76, 29, 149, ${alpha}) 0%, rgba(30, 27, 75, ${alpha}) 50%, rgba(11, 10, 26, ${alpha}) 100%)`
+        obsidian: `linear-gradient(180deg, rgba(24, 26, 33, ${alpha}) 0%, rgba(30, 33, 44, ${alpha}) 45%, rgba(16, 17, 22, ${alpha}) 100%)`,
+        carbon: `linear-gradient(180deg, rgba(24, 26, 33, ${alpha}) 0%, rgba(30, 33, 44, ${alpha}) 45%, rgba(16, 17, 22, ${alpha}) 100%)`,
+        forest: `linear-gradient(180deg, rgba(11, 46, 49, ${alpha}) 0%, rgba(14, 66, 68, ${alpha}) 45%, rgba(7, 26, 30, ${alpha}) 100%)`,
+        aurora: `linear-gradient(180deg, rgba(11, 46, 49, ${alpha}) 0%, rgba(14, 66, 68, ${alpha}) 45%, rgba(7, 26, 30, ${alpha}) 100%)`,
+        sunset: `linear-gradient(180deg, rgba(48, 22, 56, ${alpha}) 0%, rgba(92, 30, 74, ${alpha}) 48%, rgba(26, 14, 42, ${alpha}) 100%)`,
+        cyberpunk: `linear-gradient(180deg, rgba(22, 27, 64, ${alpha}) 0%, rgba(44, 32, 108, ${alpha}) 48%, rgba(11, 16, 36, ${alpha}) 100%)`,
+        neon: `linear-gradient(180deg, rgba(22, 27, 64, ${alpha}) 0%, rgba(44, 32, 108, ${alpha}) 48%, rgba(11, 16, 36, ${alpha}) 100%)`,
+        nebula: `linear-gradient(180deg, rgba(24, 18, 54, ${alpha}) 0%, rgba(46, 26, 98, ${alpha}) 48%, rgba(11, 10, 26, ${alpha}) 100%)`
       };
     }
 

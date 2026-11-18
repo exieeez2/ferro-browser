@@ -6,20 +6,20 @@
   <title>Ferro Shell</title>
   <style>
     :root {
-      --bg-strip: #111111;
-      --bg-toolbar: #1c1c1c;
-      --bg-surface: #141414;
-      --bg-elevated: #202020;
+      --bg-strip: #141416;
+      --bg-toolbar: #141416;
+      --bg-surface: #141416;
+      --bg-elevated: #202024;
       --bg-hover: rgba(255, 255, 255, 0.08);
       --bg-active: rgba(255, 255, 255, 0.13);
-      --bg-input: #121212;
-      --border-hairline: #2a2a2a;
+      --bg-input: rgba(0, 0, 0, 0.28);
+      --border-hairline: rgba(255, 255, 255, 0.09);
       --border-strong: #3c3c3c;
       --accent: #ececec;
       --accent-subtle: rgba(236, 236, 236, 0.18);
       --text-primary: #ececec;
-      --text-secondary: #9c9c9c;
-      --text-muted: #686868;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
       --radius-tab: 4px;
       --radius-ctrl: 4px;
       --radius-omni: 4px;
@@ -31,14 +31,14 @@
     }
 
     :root[data-theme="light"], [data-theme="light"] {
-      --bg-strip: #dfe1e5;
-      --bg-toolbar: #f1f3f4;
+      --bg-strip: #eceef2;
+      --bg-toolbar: #eceef2;
       --bg-surface: #ffffff;
       --bg-elevated: #ffffff;
-      --bg-hover: rgba(0, 0, 0, 0.07);
-      --bg-active: rgba(0, 0, 0, 0.12);
+      --bg-hover: rgba(0, 0, 0, 0.06);
+      --bg-active: #ffffff;
       --bg-input: #ffffff;
-      --border-hairline: #c8cbd0;
+      --border-hairline: rgba(0, 0, 0, 0.11);
       --border-strong: #9ca3af;
       --text-primary: #18181b;
       --text-secondary: #4b5563;
@@ -104,7 +104,7 @@
     }
 
     .shell-container[data-preset="true"] .tab-strip {
-      background: linear-gradient(180deg, rgba(0, 0, 0, 0.22) 0%, rgba(0, 0, 0, 0.03) 100%);
+      background: transparent;
     }
 
     .tabs-scroll-area {
@@ -249,7 +249,7 @@
     }
 
     .tab.active {
-      background: var(--bg-toolbar);
+      background: var(--bg-active);
       color: var(--text-primary);
       z-index: 2;
     }
@@ -267,8 +267,7 @@
     }
 
     .shell-container[data-preset="true"] .tab.active {
-      background: rgba(255, 255, 255, 0.13);
-      backdrop-filter: blur(10px);
+      background: rgba(255, 255, 255, 0.12);
     }
 
     .tab-favicon {
@@ -1785,18 +1784,17 @@
         root.style.setProperty('--radius-omni', omniRad + 'px');
         shellEl.setAttribute('data-rounded', rad > 0 ? 'true' : 'false');
 
-        // Top panel themes + Zen transparency (seamless radial continuum with New Tab wallpapers!)
-        // Radial center at `X% 100%` on shell matches `X% 0%` on newtab so the boundary has 0 color jump.
+        // Top panel themes in a single uniform solid tone (no gradients on tabs/topbar!)
         const alpha = (100 - Math.min(Number(s.ui_transparency || 0), 65)) / 100;
         const topThemes = {
-          carbon: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
-          obsidian: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(50, 52, 66, ${alpha}) 0%, rgba(30, 32, 41, ${alpha}) 50%, rgba(18, 19, 24, ${alpha}) 100%)`,
-          aurora: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
-          forest: `radial-gradient(ellipse 95% 230% at 35% 100%, rgba(17, 94, 89, ${alpha}) 0%, rgba(11, 59, 60, ${alpha}) 48%, rgba(7, 28, 33, ${alpha}) 100%)`,
-          sunset: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(154, 52, 18, ${alpha}) 0%, rgba(88, 28, 135, ${alpha}) 48%, rgba(31, 18, 53, ${alpha}) 100%)`,
-          neon: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
-          cyberpunk: `radial-gradient(ellipse 95% 230% at 50% 100%, rgba(91, 33, 182, ${alpha}) 0%, rgba(30, 41, 91, ${alpha}) 50%, rgba(11, 19, 41, ${alpha}) 100%)`,
-          nebula: `radial-gradient(ellipse 95% 230% at 65% 100%, rgba(76, 29, 149, ${alpha}) 0%, rgba(30, 27, 75, ${alpha}) 50%, rgba(11, 10, 26, ${alpha}) 100%)`
+          carbon: `rgba(24, 26, 33, ${alpha})`,
+          obsidian: `rgba(24, 26, 33, ${alpha})`,
+          aurora: `rgba(11, 46, 49, ${alpha})`,
+          forest: `rgba(11, 46, 49, ${alpha})`,
+          sunset: `rgba(48, 22, 56, ${alpha})`,
+          neon: `rgba(22, 27, 64, ${alpha})`,
+          cyberpunk: `rgba(22, 27, 64, ${alpha})`,
+          nebula: `rgba(24, 18, 54, ${alpha})`
         };
 
         const rawTop = s.top_panel_theme || 'default';
@@ -1807,23 +1805,22 @@
 
         if (topThemes[effectivePreset]) {
           shellEl.setAttribute('data-preset', 'true');
-          shellEl.style.background = topThemes[effectivePreset];
-          root.style.removeProperty('--bg-strip');
-          root.style.removeProperty('--bg-toolbar');
+          const solidTone = topThemes[effectivePreset];
+          root.style.setProperty('--bg-strip', solidTone);
+          root.style.setProperty('--bg-toolbar', solidTone);
+          shellEl.style.background = solidTone;
         } else {
           shellEl.setAttribute('data-preset', 'false');
           if (isLight) {
-            const stripBg = `rgba(229, 231, 235, ${alpha})`;
-            const toolBg = `rgba(244, 244, 246, ${alpha})`;
-            root.style.setProperty('--bg-strip', stripBg);
-            root.style.setProperty('--bg-toolbar', toolBg);
-            shellEl.style.background = stripBg;
+            const solidLight = `rgba(236, 238, 242, ${alpha})`;
+            root.style.setProperty('--bg-strip', solidLight);
+            root.style.setProperty('--bg-toolbar', solidLight);
+            shellEl.style.background = solidLight;
           } else {
-            const stripBg = `rgba(14, 14, 15, ${alpha})`;
-            const toolBg = `rgba(20, 20, 20, ${alpha})`;
-            root.style.setProperty('--bg-strip', stripBg);
-            root.style.setProperty('--bg-toolbar', toolBg);
-            shellEl.style.background = stripBg;
+            const solidDark = `rgba(20, 20, 22, ${alpha})`;
+            root.style.setProperty('--bg-strip', solidDark);
+            root.style.setProperty('--bg-toolbar', solidDark);
+            shellEl.style.background = solidDark;
           }
         }
 

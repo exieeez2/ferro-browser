@@ -301,16 +301,16 @@ fn compute_surface_rgba(s: &BrowserSettings) -> gdk::RGBA {
         s.wallpaper_type.as_str()
     };
     match key {
-        "aurora" | "forest" => gdk::RGBA::new(7.0 / 255.0, 28.0 / 255.0, 33.0 / 255.0, alpha),
-        "neon" | "cyberpunk" => gdk::RGBA::new(11.0 / 255.0, 19.0 / 255.0, 41.0 / 255.0, alpha),
-        "sunset" => gdk::RGBA::new(31.0 / 255.0, 18.0 / 255.0, 53.0 / 255.0, alpha),
-        "nebula" => gdk::RGBA::new(11.0 / 255.0, 10.0 / 255.0, 26.0 / 255.0, alpha),
-        "carbon" | "obsidian" => gdk::RGBA::new(18.0 / 255.0, 19.0 / 255.0, 24.0 / 255.0, alpha),
+        "aurora" | "forest" => gdk::RGBA::new(11.0 / 255.0, 46.0 / 255.0, 49.0 / 255.0, alpha),
+        "neon" | "cyberpunk" => gdk::RGBA::new(22.0 / 255.0, 27.0 / 255.0, 64.0 / 255.0, alpha),
+        "sunset" => gdk::RGBA::new(48.0 / 255.0, 22.0 / 255.0, 56.0 / 255.0, alpha),
+        "nebula" => gdk::RGBA::new(24.0 / 255.0, 18.0 / 255.0, 54.0 / 255.0, alpha),
+        "carbon" | "obsidian" => gdk::RGBA::new(24.0 / 255.0, 26.0 / 255.0, 33.0 / 255.0, alpha),
         _ => {
             if s.theme_mode == "light" {
-                gdk::RGBA::new(244.0 / 255.0, 244.0 / 255.0, 246.0 / 255.0, alpha)
+                gdk::RGBA::new(236.0 / 255.0, 238.0 / 255.0, 242.0 / 255.0, alpha)
             } else {
-                gdk::RGBA::new(20.0 / 255.0, 20.0 / 255.0, 20.0 / 255.0, alpha)
+                gdk::RGBA::new(20.0 / 255.0, 20.0 / 255.0, 22.0 / 255.0, alpha)
             }
         }
     }
